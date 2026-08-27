@@ -53,6 +53,7 @@ let manualClick = false
 let suppressClickUntil = 0
 
 const clamp = (value: number, min: number, max: number): number => Math.max(min, Math.min(max, value))
+const delay = (ms: number): Promise<void> => new Promise(resolve => window.setTimeout(resolve, ms))
 
 function paginatedMode(): boolean {
   try {
@@ -166,8 +167,9 @@ function cleanupRenderer(): void {
 
 async function restoreUnderlyingAndCleanup(direction: CurlDirection): Promise<void> {
   if (gesture.underlyingMoved) {
+    await delay(120)
     clickMargin(opposite(direction))
-    await new Promise(resolve => window.setTimeout(resolve, 105))
+    await delay(115)
   }
   cleanupRenderer()
 }
