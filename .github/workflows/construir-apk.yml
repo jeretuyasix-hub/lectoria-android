@@ -26,6 +26,27 @@ jobs:
       - name: Configurar Android SDK
         uses: android-actions/setup-android@v3
 
+      - name: Restaurar firma Android de desarrollo
+        uses: actions/cache@v4
+        with:
+          path: ~/.android/debug.keystore
+          key: lectoria-android-debug-keystore-v1
+
+      - name: Crear firma Android de desarrollo si falta
+        run: |
+          mkdir -p ~/.android
+          if [ ! -f ~/.android/debug.keystore ]; then
+            keytool -genkeypair \
+              -keystore ~/.android/debug.keystore \
+              -storepass android \
+              -alias androiddebugkey \
+              -keypass android \
+              -keyalg RSA \
+              -keysize 2048 \
+              -validity 10000 \
+              -dname "CN=Lectoria Desarrollo, O=Lectoria, C=EC"
+          fi
+
       - name: Instalar dependencias
         run: npm install --no-audit --no-fund
 
