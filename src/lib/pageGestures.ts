@@ -10,6 +10,7 @@ type GestureState = {
   ended: boolean
   commitWanted: boolean
   underlyingMoved: boolean
+  movedAt: number
   startX: number
   startY: number
   lastX: number
@@ -32,6 +33,7 @@ const gesture: GestureState = {
   ended: false,
   commitWanted: false,
   underlyingMoved: false,
+  movedAt: 0,
   startX: 0,
   startY: 0,
   lastX: 0,
@@ -52,12 +54,25 @@ let renderer: PageCurlRenderer | null = null
 let manualClick = false
 let suppressClickUntil = 0
 
+let cachedSnapshot: HTMLCanvasElement | null = null
+let cachedDocument: Document | null = null
+let cachedSettingsKey = ''
+let snapshotPromise: Promise<HTMLCanvasElement> | null = null
+let snapshotPromiseDocument: Document | null = null
+let snapshotPromiseSettingsKey = ''
+let snapshotVersion = 0
+let snapshotTimer = 0
+
 const clamp = (value: number, min: number, max: number): number => Math.max(min, Math.min(max, value))
 const delay = (ms: number): Promise<void> => new Promise(resolve => window.setTimeout(resolve, ms))
 
+function settingsKey(): string {
+  return localStorage.getItem('lectoria-settings') || '{}'
+}
+
 function paginatedMode(): boolean {
   try {
-    const settings = JSON.parse(localStorage.getItem('lectoria-settings') || '{}') as { pageMode?: string }
+    const settings = JSON.parse(settingsKey()) as { pageMode?: string }
     return settings.pageMode !== 'scroll'
   } catch {
     return true
@@ -83,11 +98,26 @@ function frameForDocument(doc: Document): HTMLIFrameElement | null {
   return null
 }
 
+function currentEpubDocument(): Document | null {
+  const frames = Array.from(document.querySelectorAll<HTMLIFrameElement>('.epub-viewer iframe'))
+  for (let i = frames.length - 1; i >= 0; i -= 1) {
+    const frame = frames[i]
+    const rect = frame.getBoundingClientRect()
+    if (rect.width < 2 || rect.height < 2) continue
+    try {
+      if (frame.contentDocument?.documentElement) return frame.contentDocument
+    } catch {
+      // Ignore inaccessible frames.
+    }
+  }
+  return null
+}
+
 function averageColorDifference(canvas: HTMLCanvasElement): number {
   const ctx = canvas.getContext('2d', { willReadFrequently: true })
   if (!ctx || canvas.width < 4 || canvas.height < 4) return 0
-  const stepX = Math.max(8, Math.floor(canvas.width / 28))
-  const stepY = Math.max(8, Math.floor(canvas.height / 40))
+  const stepX = Math.max(10, Math.floor(canvas.width / 24))
+  const stepY = Math.max(10, Math.floor(canvas.height / 34))
   const base = ctx.getImageData(2, 2, 1, 1).data
   let samples = 0
   let different = 0
@@ -105,7 +135,7 @@ function averageColorDifference(canvas: HTMLCanvasElement): number {
 async function captureCurrentPage(sourceDocument: Document): Promise<HTMLCanvasElement> {
   const page = viewer()
   if (!page) throw new Error('No se encontró la página visible')
-  const scale = Math.min(1.45, Math.max(1, window.devicePixelRatio || 1))
+  const scale = Math.min(1.35, Math.max(1, window.devicePixelRatio || 1))
 
   try {
     const captured = await html2canvas(page, {
@@ -143,6 +173,57 @@ async function captureCurrentPage(sourceDocument: Document): Promise<HTMLCanvasE
   })
 }
 
+function invalidateSnapshot(): void {
+  snapshotVersion += 1
+  cachedSnapshot = null
+  cachedDocument = null
+  cachedSettingsKey = ''
+}
+
+function snapshotFor(doc: Document): HTMLCanvasElement | null {
+  const key = settingsKey()
+  return cachedSnapshot && cachedDocument === doc && cachedSettingsKey === key ? cachedSnapshot : null
+}
+
+async function ensureSnapshot(doc: Document): Promise<HTMLCanvasElement> {
+  const existing = snapshotFor(doc)
+  if (existing) return existing
+  const key = settingsKey()
+  if (snapshotPromise && snapshotPromiseDocument === doc && snapshotPromiseSettingsKey === key) return snapshotPromise
+
+  const version = snapshotVersion
+  snapshotPromiseDocument = doc
+  snapshotPromiseSettingsKey = key
+  snapshotPromise = captureCurrentPage(doc).then(canvas => {
+    if (version === snapshotVersion && !renderer) {
+      cachedSnapshot = canvas
+      cachedDocument = doc
+      cachedSettingsKey = key
+    }
+    return canvas
+  }).finally(() => {
+    snapshotPromise = null
+    snapshotPromiseDocument = null
+    snapshotPromiseSettingsKey = ''
+  })
+  return snapshotPromise
+}
+
+function scheduleSnapshot(ms = 260): void {
+  window.clearTimeout(snapshotTimer)
+  snapshotTimer = window.setTimeout(() => {
+    if (!paginatedMode()) return
+    if (renderer || gesture.active || gesture.preparing) {
+      scheduleSnapshot(220)
+      return
+    }
+    const doc = currentEpubDocument()
+    if (!doc) return
+    if (snapshotFor(doc)) return
+    void ensureSnapshot(doc).catch(() => undefined)
+  }, ms)
+}
+
 function opposite(direction: CurlDirection): CurlDirection {
   return direction === 'next' ? 'prev' : 'next'
 }
@@ -151,9 +232,11 @@ function clickMargin(direction: CurlDirection): void {
   const selector = direction === 'next' ? '.tap-zone.right' : '.tap-zone.left'
   const button = document.querySelector<HTMLButtonElement>(selector)
   if (!button) return
+  invalidateSnapshot()
   manualClick = true
   button.click()
   manualClick = false
+  scheduleSnapshot(520)
 }
 
 function cleanupRenderer(): void {
@@ -165,13 +248,29 @@ function cleanupRenderer(): void {
   gesture.underlyingMoved = false
 }
 
+function resetGesture(): void {
+  gesture.active = false
+  gesture.blocked = false
+  gesture.dragging = false
+  gesture.preparing = false
+  gesture.ready = false
+  gesture.ended = false
+  gesture.commitWanted = false
+  gesture.underlyingMoved = false
+  gesture.movedAt = 0
+  gesture.sourceDocument = null
+}
+
 async function restoreUnderlyingAndCleanup(direction: CurlDirection): Promise<void> {
   if (gesture.underlyingMoved) {
-    await delay(120)
+    const elapsed = performance.now() - gesture.movedAt
+    if (elapsed < 285) await delay(285 - elapsed)
     clickMargin(opposite(direction))
-    await delay(115)
+    await delay(105)
   }
   cleanupRenderer()
+  resetGesture()
+  scheduleSnapshot(430)
 }
 
 async function settleGesture(): Promise<void> {
@@ -180,14 +279,16 @@ async function settleGesture(): Promise<void> {
   if (gesture.commitWanted) {
     suppressClickUntil = performance.now() + 650
     const targetX = direction === 'next' ? -gesture.width * 1.02 : gesture.width * 2.02
-    const drift = clamp((gesture.lastY - gesture.startY) * 0.16, -gesture.height * 0.12, gesture.height * 0.12)
-    const targetY = clamp(gesture.lastY + drift, -gesture.height * 0.12, gesture.height * 1.12)
-    const duration = clamp(255 - Math.abs(gesture.velocityX) * 105, 145, 255)
+    const drift = clamp((gesture.lastY - gesture.startY) * 0.14, -gesture.height * 0.11, gesture.height * 0.11)
+    const targetY = clamp(gesture.lastY + drift, -gesture.height * 0.11, gesture.height * 1.11)
+    const duration = clamp(235 - Math.abs(gesture.velocityX) * 95, 135, 235)
     await renderer.animateTo(targetX, targetY, duration)
     cleanupRenderer()
+    resetGesture()
+    scheduleSnapshot(380)
   } else {
     const edgeX = direction === 'next' ? gesture.width : 0
-    await renderer.animateTo(edgeX, gesture.startY, 185)
+    await renderer.animateTo(edgeX, gesture.startY, 175)
     await restoreUnderlyingAndCleanup(direction)
   }
 }
@@ -198,7 +299,8 @@ async function prepareCurl(generation: number): Promise<void> {
   const sourceDocument = gesture.sourceDocument
   const direction = gesture.direction
   try {
-    const snapshot = await captureCurrentPage(sourceDocument)
+    let snapshot = snapshotFor(sourceDocument)
+    if (!snapshot) snapshot = await ensureSnapshot(sourceDocument)
     if (generation !== gesture.generation) return
     if (gesture.ended && !gesture.commitWanted) {
       gesture.preparing = false
@@ -211,8 +313,10 @@ async function prepareCurl(generation: number): Promise<void> {
     stage.classList.add('lectoria-curl-active')
     renderer = new PageCurlRenderer(stage, page, snapshot, direction, gesture.startY)
     renderer.setPointer(gesture.lastX, gesture.lastY)
+
     clickMargin(direction)
     gesture.underlyingMoved = true
+    gesture.movedAt = performance.now()
     gesture.ready = true
     gesture.preparing = false
 
@@ -223,6 +327,7 @@ async function prepareCurl(generation: number): Promise<void> {
     gesture.ready = false
     cleanupRenderer()
     if (gesture.ended && gesture.commitWanted) clickMargin(direction)
+    resetGesture()
   }
 }
 
@@ -238,18 +343,6 @@ function localTouch(touch: Touch, sourceDocument: Document): { x: number; y: num
   return { x: touch.clientX, y: touch.clientY }
 }
 
-function resetGesture(): void {
-  gesture.active = false
-  gesture.blocked = false
-  gesture.dragging = false
-  gesture.preparing = false
-  gesture.ready = false
-  gesture.ended = false
-  gesture.commitWanted = false
-  gesture.underlyingMoved = false
-  gesture.sourceDocument = null
-}
-
 function startGesture(event: Event, sourceDocument: Document): void {
   if (!paginatedMode() || renderer) return
   const e = event as TouchEvent
@@ -260,6 +353,8 @@ function startGesture(event: Event, sourceDocument: Document): void {
   const rect = viewer()?.getBoundingClientRect()
   const point = localTouch(touch, sourceDocument)
 
+  if (!snapshotFor(sourceDocument)) void ensureSnapshot(sourceDocument).catch(() => undefined)
+
   gesture.generation += 1
   gesture.active = true
   gesture.blocked = false
@@ -269,6 +364,7 @@ function startGesture(event: Event, sourceDocument: Document): void {
   gesture.ended = false
   gesture.commitWanted = false
   gesture.underlyingMoved = false
+  gesture.movedAt = 0
   gesture.startX = point.x
   gesture.startY = point.y
   gesture.lastX = point.x
@@ -292,8 +388,8 @@ function moveGesture(event: Event): void {
   const absY = Math.abs(dy)
 
   if (!gesture.dragging) {
-    if (absX < 7 && absY < 7) return
-    if (absY > absX * 1.18) {
+    if (absX < 6 && absY < 6) return
+    if (absY > absX * 1.22) {
       gesture.blocked = true
       return
     }
@@ -356,8 +452,8 @@ function endGesture(event: Event): void {
   }
 
   if (e.cancelable) e.preventDefault()
-  const threshold = Math.min(150, gesture.width * 0.20)
-  const fastFlick = Math.abs(gesture.velocityX) >= 0.52 && distance >= 30
+  const threshold = Math.min(142, gesture.width * 0.19)
+  const fastFlick = Math.abs(gesture.velocityX) >= 0.48 && distance >= 28
   gesture.commitWanted = distance >= threshold || fastFlick
   gesture.ended = true
 
@@ -388,6 +484,7 @@ function attachDocument(doc: Document): void {
   doc.addEventListener('touchmove', moveGesture, { passive: false })
   doc.addEventListener('touchend', endGesture, { passive: false })
   doc.addEventListener('touchcancel', cancelGesture, { passive: false })
+  scheduleSnapshot(140)
 }
 
 function attachFrame(frame: HTMLIFrameElement): void {
@@ -396,6 +493,8 @@ function attachFrame(frame: HTMLIFrameElement): void {
   const attach = (): void => {
     try {
       if (frame.contentDocument) attachDocument(frame.contentDocument)
+      invalidateSnapshot()
+      scheduleSnapshot(170)
     } catch {
       // EPUB.js normally renders same-origin iframe content.
     }
@@ -412,6 +511,11 @@ function attachStage(stage: HTMLElement): void {
   stage.addEventListener('touchend', endGesture, { capture: true, passive: false })
   stage.addEventListener('touchcancel', cancelGesture, { capture: true, passive: false })
   stage.addEventListener('click', event => {
+    const target = event.target as Element | null
+    if (!manualClick && target?.closest('.tap-zone')) {
+      invalidateSnapshot()
+      scheduleSnapshot(520)
+    }
     if (!manualClick && performance.now() < suppressClickUntil) {
       event.preventDefault()
       event.stopImmediatePropagation()
@@ -426,9 +530,15 @@ function scanReader(): void {
 
 function startObserver(): void {
   scanReader()
+  scheduleSnapshot(360)
   const observer = new MutationObserver(scanReader)
   observer.observe(document.documentElement, { childList: true, subtree: true })
 }
+
+window.addEventListener('lectoria:page-settled', () => {
+  invalidateSnapshot()
+  scheduleSnapshot(180)
+})
 
 if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', startObserver, { once: true })
 else startObserver()
