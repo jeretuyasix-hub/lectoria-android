@@ -49,7 +49,7 @@ void main() {
   centered.y += (0.5 - y) * height * 0.035;
 
   gl_Position = vec4(centered.x, centered.y, -height * 0.72, 1.0);
-  v_uv = a_uv;
+  v_uv = vec2(a_uv.x, 1.0 - a_uv.y);
   v_bend = t * onFoldedSide;
   v_height = height;
   v_foldSide = onFoldedSide;
