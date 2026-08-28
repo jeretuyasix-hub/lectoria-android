@@ -4,6 +4,7 @@ import App from './App'
 import './styles.css'
 import './page-turn.css'
 import './mobile-fixes.css'
+import './android-input-fix.css'
 
 ReactDOM.createRoot(document.getElementById('root')!).render(<React.StrictMode><App /></React.StrictMode>)
 
