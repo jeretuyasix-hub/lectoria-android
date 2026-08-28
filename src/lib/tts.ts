@@ -94,13 +94,20 @@ async function openAiSpeak(text: string, rate = 1) {
     })
     if (!response.ok) throw new Error(`No se pudo generar voz (${response.status}).`)
     const blob = await response.blob()
-    // La API de voz no expone uso por solicitud; registramos una estimación conservadora (~$0,015/min).
     const estimatedMinutes = Math.max(0.05, chunk.length / 900)
     recordEstimatedAudioCost(estimatedMinutes * 0.015)
     await playAudioBlob(blob)
   }
 }
 
+/** Voz inmediata del dispositivo. Úsala para el libro y selecciones donde la latencia importa. */
+export function speakInstant(text: string, rate = 1, voiceName?: string, onEnd?: () => void) {
+  if (!text.trim()) return false
+  stopSpeaking()
+  return nativeSpeak(text, rate, voiceName, onEnd)
+}
+
+/** Voz de mayor calidad: intenta OpenAI y cae a la voz local si falla. */
 export async function speak(text: string, rate = 1, voiceName?: string, onEnd?: () => void) {
   if (!text.trim()) return
   stopSpeaking()
@@ -112,7 +119,6 @@ export async function speak(text: string, rate = 1, voiceName?: string, onEnd?: 
       return
     } catch (error) {
       if (error instanceof DOMException && error.name === 'AbortError') return
-      // Si falla la voz de API, Android conserva una segunda vía local.
     }
   }
   nativeSpeak(text, rate, voiceName, onEnd)
