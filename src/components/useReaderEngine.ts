@@ -17,7 +17,7 @@ export function useReaderEngine(bookRecord:BookRecord,onCenterTap:()=>void,onOff
   const [settings,setSettings]=useState(loadSettings),[progress,setProgress]=useState(bookRecord.progress||0),[location,setLocation]=useState(''),[chapter,setChapter]=useState(''),[href,setHref]=useState('')
   const [toc,setToc]=useState<TocItem[]>([]),[selectedText,setSelectedText]=useState(''),[selectedCfi,setSelectedCfi]=useState(''),[nearby,setNearby]=useState('')
   const [limit,setLimit]=useState(false),[minutes,setMinutes]=useState(0)
-  const sessionStart=useRef(Date.now()),sessionId=useRef<number|undefined>(),lastChapter=useRef('')
+  const sessionStart=useRef(Date.now()),sessionId=useRef<number|undefined>(undefined),lastChapter=useRef('')
   settingsRef.current=settings
   const context:ReaderContext=useMemo(()=>({bookId:bookRecord.id,title:bookRecord.title,author:bookRecord.author,selectedText,nearbyText:nearby,currentChapter:chapter,currentHref:href,progress,spoilerPolicy:settings.spoilerPolicy,bookType:bookRecord.type||'essay'}),[bookRecord,selectedText,nearby,chapter,href,progress,settings.spoilerPolicy])
 
