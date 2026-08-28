@@ -23,7 +23,21 @@
 .quick-prompts.primary,.quick-prompts.extras{scrollbar-width:none}.quick-prompts.primary::-webkit-scrollbar,.quick-prompts.extras::-webkit-scrollbar{display:none}
 .message.thinking{opacity:.82}
 
+/* Respuestas didácticas: Markdown ligero renderizado por Lectoria. */
+.tutor-rich-text{display:block;color:#203d34}
+.tutor-rich-text p{margin:.42rem 0!important;white-space:normal!important;line-height:1.52}
+.tutor-rich-text h2,.tutor-rich-text h3,.tutor-rich-text h4{margin:.8rem 0 .3rem;color:#155f4d;line-height:1.22;font-family:inherit}
+.tutor-rich-text h2{font-size:1.23rem}.tutor-rich-text h3{font-size:1.12rem}.tutor-rich-text h4{font-size:1.02rem}
+.tutor-rich-text strong{font-weight:800;color:#143f32}.tutor-rich-text em{color:#49675d}.tutor-rich-text code{font-family:ui-monospace,SFMono-Regular,Menlo,monospace;background:#edf3ef;padding:.08rem .28rem;border-radius:5px;font-size:.9em}
+.rich-gap{height:.24rem}.rich-bullet{display:grid;grid-template-columns:1.2rem minmax(0,1fr);gap:.25rem;align-items:start;margin:.22rem 0}.rich-bullet>span{color:#28745e;font-weight:800;line-height:1.52}.rich-bullet>p{margin:0!important}.rich-bullet.numbered{grid-template-columns:1.55rem minmax(0,1fr)}
+
 .ai-config-card{display:grid;gap:12px;border-top:1px solid #d9dfda;margin-top:6px;padding:18px 0 8px}.ai-config-heading{display:flex;justify-content:space-between;align-items:center;gap:12px}.ai-config-heading>div{display:flex;flex-direction:column;gap:3px}.ai-config-heading small{color:#718079;line-height:1.3}.ai-dot{width:12px;height:12px;border-radius:50%;background:#b9c0bc;box-shadow:0 0 0 5px #eef0ee}.ai-dot.connected{background:#198060;box-shadow:0 0 0 5px #e3f1eb}.api-key-input{width:100%;min-width:0;border:1px solid #d6ddd8!important;border-radius:12px!important;padding:.75rem!important}.ai-config-status{margin:0;padding:.65rem .75rem;border-radius:10px;background:#eef3f0;color:#52675f;font-size:.75rem;overflow-wrap:anywhere}.ai-config-actions{display:grid;grid-template-columns:minmax(0,1fr) minmax(0,.7fr);gap:8px}.ai-config-actions button{border:0;border-radius:12px;padding:.72rem .65rem;background:#155f4d;color:#fff;font-weight:800}.ai-config-actions button.secondary{background:#fff;color:#155f4d;border:1px solid #d3ddd7}.ai-config-actions button:disabled{opacity:.55}
+
+.ai-balance-card{display:grid;gap:10px;padding:13px;border:1px solid #d6e2db;border-radius:16px;background:linear-gradient(145deg,#edf7f2,#f9fbf8);color:#31594b}
+.ai-balance-main{display:flex;align-items:flex-end;justify-content:space-between;gap:12px}.ai-balance-main span{font-size:.76rem;font-weight:750;color:#537064}.ai-balance-main strong{font-size:1.75rem;line-height:1;color:#12634f;font-variant-numeric:tabular-nums}
+.ai-balance-details{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:6px}.ai-balance-details span{display:flex;flex-direction:column;gap:2px;padding:7px;background:#ffffffad;border-radius:10px;font-size:.62rem;color:#6a7c75}.ai-balance-details b{font-size:.75rem;color:#2f584a;font-variant-numeric:tabular-nums;overflow:hidden;text-overflow:ellipsis}
+.balance-reference{display:grid!important;grid-template-columns:minmax(0,1fr) 92px!important;align-items:center!important;gap:10px!important}.balance-reference span{font-size:.72rem;color:#526b62}.balance-reference input{width:92px!important;min-width:0!important;padding:.55rem .6rem!important;text-align:right!important;border:1px solid #cddbd4!important;border-radius:10px!important;background:#fff!important;color:#17342b!important}
+.ai-balance-card>small{font-size:.62rem;line-height:1.35;color:#75857f}
 
 @media(max-width:700px){
   /* Tutor: vista completa en teléfono; no debe tapar su propia respuesta. */
@@ -56,6 +70,7 @@
   .more-tools{font-size:.72rem!important;padding:.2rem .6rem!important;margin:0 auto!important}
   .chat-log{flex:1 1 0!important;min-height:0!important;height:auto!important;max-height:none!important;padding:8px 10px!important}
   .message{max-width:94%!important;font-size:.9rem!important;line-height:1.42!important}
+  .message.assistant{padding:11px 12px!important}
   .tutor-input{padding:7px 9px max(8px,env(safe-area-inset-bottom))!important;gap:6px!important}
   .tutor-input textarea{min-height:40px!important;max-height:96px!important;font-size:.88rem!important}
   .tutor-input button{width:40px!important;height:40px!important;flex:0 0 40px!important}
@@ -85,4 +100,5 @@
 
   /* Ajustes: conexión IA no puede aumentar el ancho del panel. */
   .ai-config-card,.ai-config-card label,.ai-config-card input,.ai-config-card select{min-width:0!important;max-width:100%!important}
+  .ai-balance-details{grid-template-columns:1fr 1fr}.ai-balance-details span:last-child{grid-column:1/-1}
 }
