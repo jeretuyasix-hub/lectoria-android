@@ -6,6 +6,7 @@ import './page-turn.css'
 import './mobile-fixes.css'
 import './mobile-v4.css'
 import './mobile-v6.css'
+import './mobile-v7.css'
 import './android-input-fix.css'
 
 ReactDOM.createRoot(document.getElementById('root')!).render(<React.StrictMode><App /></React.StrictMode>)
