@@ -1,6 +1,6 @@
 import { AnimatePresence, motion } from 'framer-motion'
 import { useEffect, useRef, useState, type ReactNode } from 'react'
-import { askTutor, getAiEstimatedRemaining, isAiConfigured, localTutorFallback } from '../lib/ai'
+import { askTutor, getAiConfig, getAiEstimatedRemaining, isAiConfigured, localTutorFallback, saveAiConfig, type AiResponseLength } from '../lib/ai'
 import { db } from '../lib/db'
 import { getTutorMemory, remember } from '../lib/memory'
 import { recordReadingEvent } from '../lib/history'
@@ -54,17 +54,17 @@ export default function TutorPanel({ open, onClose, context, onConfigureAi }: { 
   const [input, setInput] = useState('')
   const [busy, setBusy] = useState(false)
   const [listening, setListening] = useState(false)
+  const [dictationStatus, setDictationStatus] = useState('')
   const [showMore, setShowMore] = useState(false)
   const [showSelection, setShowSelection] = useState(false)
   const [aiReady, setAiReady] = useState(false)
   const [remaining, setRemaining] = useState(getAiEstimatedRemaining())
+  const [responseLength, setResponseLength] = useState<AiResponseLength>(() => getAiConfig().responseLength)
   const recognition = useRef<SpeechRecognitionController | null>(null)
   const endRef = useRef<HTMLDivElement | null>(null)
 
   useEffect(() => {
-    void db.tutorMessages.where('bookId').equals(context.bookId).sortBy('createdAt').then(rows => {
-      setMessages(rows.slice(-40).map(r => ({ role: r.role, content: r.content })))
-    })
+    void db.tutorMessages.where('bookId').equals(context.bookId).sortBy('createdAt').then(rows => setMessages(rows.slice(-40).map(r => ({ role: r.role, content: r.content }))))
   }, [context.bookId])
 
   useEffect(() => () => recognition.current?.stop(), [])
@@ -75,11 +75,14 @@ export default function TutorPanel({ open, onClose, context, onConfigureAi }: { 
   }, [])
   useEffect(() => {
     if (open) {
-      setAiReady(isAiConfigured())
-      setRemaining(getAiEstimatedRemaining())
+      setAiReady(isAiConfigured()); setRemaining(getAiEstimatedRemaining()); setResponseLength(getAiConfig().responseLength)
       window.setTimeout(() => endRef.current?.scrollIntoView({ block: 'end' }), 80)
     }
   }, [open, messages, busy])
+
+  function chooseLength(length: AiResponseLength) {
+    const config = getAiConfig(); saveAiConfig({ ...config, responseLength: length }); setResponseLength(length)
+  }
 
   async function send(content: string, visibleLabel?: string) {
     const trimmed = content.trim()
@@ -88,7 +91,7 @@ export default function TutorPanel({ open, onClose, context, onConfigureAi }: { 
     const uiUserMessage: TutorMessage = { role: 'user', content: displayText }
     const uiNext: TutorMessage[] = [...messages, uiUserMessage]
     const modelNext: TutorMessage[] = [...messages, { role: 'user', content: trimmed }]
-    setMessages(uiNext); setInput(''); setBusy(true)
+    setMessages(uiNext); setInput(''); setBusy(true); setDictationStatus('')
     await db.tutorMessages.add({ bookId: context.bookId, role: 'user', content: displayText, createdAt: Date.now() })
     void recordReadingEvent(context.bookId, 'tutor_question', 'reader', { chapter: context.currentChapter, href: context.currentHref, progress: context.progress, text: displayText.slice(0, 420) })
 
@@ -99,88 +102,63 @@ export default function TutorPanel({ open, onClose, context, onConfigureAi }: { 
       ])
       const enriched = { ...context, retrievedText, memoryText }
       let answer: string
-      try {
-        answer = await askTutor(enriched, modelNext.slice(-12))
-        setAiReady(true)
-      } catch (error) {
-        const configured = isAiConfigured()
-        setAiReady(configured)
+      try { answer = await askTutor(enriched, modelNext.slice(-12)); setAiReady(true) }
+      catch (error) {
+        const configured = isAiConfigured(); setAiReady(configured)
         const fallback = localTutorFallback(enriched, trimmed)
-        answer = configured
-          ? `### No se pudo completar la consulta\n\n${error instanceof Error && error.message && error.message !== 'AI_NOT_CONFIGURED' ? `**Detalle:** ${error.message}\n\n` : ''}${fallback}`
-          : fallback
+        answer = configured ? `### No se pudo completar la consulta\n\n${error instanceof Error && error.message && error.message !== 'AI_NOT_CONFIGURED' ? `**Detalle:** ${error.message}\n\n` : ''}${fallback}` : fallback
       }
       const assistantMessage: TutorMessage = { role: 'assistant', content: answer }
-      setMessages([...uiNext, assistantMessage])
-      setRemaining(getAiEstimatedRemaining())
+      setMessages([...uiNext, assistantMessage]); setRemaining(getAiEstimatedRemaining())
       await db.tutorMessages.add({ bookId: context.bookId, role: 'assistant', content: answer, createdAt: Date.now(), source: retrievedText ? 'book' : 'mixed' })
       void recordReadingEvent(context.bookId, 'tutor_answer', 'ai', { chapter: context.currentChapter, href: context.currentHref, progress: context.progress, text: answer.slice(0, 420) })
       await remember(context.bookId, 'Última pregunta', displayText.slice(0, 260))
       if (context.selectedText) await remember(context.bookId, 'Último fragmento trabajado', context.selectedText.slice(0, 520))
-    } finally {
-      setBusy(false)
-    }
+    } finally { setBusy(false) }
   }
 
   function toggleVoice() {
-    if (listening) {
-      recognition.current?.stop(); recognition.current = null; setListening(false); return
-    }
+    if (listening) { recognition.current?.stop(); setDictationStatus('Transcribiendo…'); return }
+    setDictationStatus('Escuchando… toca de nuevo para terminar')
     const controller = startSpeechRecognition(
-      text => { setInput(text); void send(text) },
-      () => { setListening(false); recognition.current = null }
+      text => { setInput(v => v ? `${v.trim()} ${text}` : text); setDictationStatus('Dictado transcrito. Revísalo y envíalo cuando quieras.') },
+      () => { setListening(false); recognition.current = null },
+      message => setDictationStatus(message)
     )
-    if (!controller) {
-      setInput(v => v || 'El reconocimiento de voz no está disponible en este dispositivo.')
-      return
-    }
-    recognition.current = controller
-    setListening(true)
+    if (!controller) { setDictationStatus('El reconocimiento de voz no está disponible.'); return }
+    recognition.current = controller; setListening(true)
   }
 
-  return (
-    <AnimatePresence>
-      {open && (
-        <>
-          <motion.button className="tutor-backdrop" aria-label="Cerrar tutor" onClick={onClose} initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }} />
-          <motion.aside className="tutor-panel" initial={{ y: '102%', opacity: .4 }} animate={{ y: 0, opacity: 1 }} exit={{ y: '102%', opacity: 0 }} transition={{ type: 'spring', stiffness: 390, damping: 38 }}>
-            <div className="tutor-grabber" />
-            <header className="tutor-header">
-              <div><strong>Tutor Lectoria</strong><span>Texto primero · contexto de lo leído · sin adelantos</span></div>
-              <button onClick={onClose} aria-label="Cerrar tutor">×</button>
-            </header>
+  return <AnimatePresence>{open && <>
+    <motion.button className="tutor-backdrop" aria-label="Cerrar tutor" onClick={onClose} initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }} />
+    <motion.aside className="tutor-panel" initial={{ y: '102%', opacity: .4 }} animate={{ y: 0, opacity: 1 }} exit={{ y: '102%', opacity: 0 }} transition={{ type: 'spring', stiffness: 390, damping: 38 }}>
+      <div className="tutor-grabber" />
+      <header className="tutor-header"><div><strong>Tutor Lectoria</strong><span>Texto primero · contexto de lo leído · sin adelantos</span></div><button onClick={onClose} aria-label="Cerrar tutor">×</button></header>
 
-            <div className={`ai-status ${aiReady ? 'connected' : 'local'}`}>
-              <span><b>{aiReady ? 'IA generativa conectada' : 'Modo local'}</b>{aiReady ? `Saldo estimado: $${remaining.toFixed(2)}` : 'Conecta la IA para explicaciones interpretativas completas.'}</span>
-              {!aiReady && onConfigureAi && <button onClick={onConfigureAi}>Conectar IA</button>}
-            </div>
+      <div className={`ai-status ${aiReady ? 'connected' : 'local'}`}><span><b>{aiReady ? 'IA generativa conectada' : 'Modo local'}</b>{aiReady ? `Saldo estimado: $${remaining.toFixed(2)}` : 'Conecta la IA para explicaciones interpretativas completas.'}</span>{!aiReady && onConfigureAi && <button onClick={onConfigureAi}>Conectar IA</button>}</div>
 
-            {context.selectedText && <section className={`selection-preview ${showSelection ? 'expanded' : ''}`}>
-              <div className="selection-preview-head"><div className="source-chip book">LIBRO</div><button onClick={() => setShowSelection(v => !v)}>{showSelection ? 'Contraer' : 'Ver fragmento'}</button></div>
-              <p>“{showSelection ? context.selectedText.slice(0, 1600) : context.selectedText.slice(0, 240)}{context.selectedText.length > (showSelection ? 1600 : 240) ? '…' : ''}”</p>
-            </section>}
+      {context.selectedText && <section className={`selection-preview ${showSelection ? 'expanded' : ''}`}><div className="selection-preview-head"><div className="source-chip book">LIBRO</div><button onClick={() => setShowSelection(v => !v)}>{showSelection ? 'Contraer' : 'Ver fragmento'}</button></div><p>“{showSelection ? context.selectedText.slice(0, 1600) : context.selectedText.slice(0, 240)}{context.selectedText.length > (showSelection ? 1600 : 240) ? '…' : ''}”</p></section>}
 
-            <section className="tutor-tools" aria-label="Herramientas del tutor">
-              <div className="quick-prompts primary">{primaryPrompts.map(([label, prompt]) => <button key={label} onClick={() => void send(prompt, label)} disabled={busy}>{label}</button>)}</div>
-              <button className="more-tools" onClick={() => setShowMore(v => !v)}>{showMore ? 'Ocultar herramientas' : 'Más herramientas'}</button>
-              <AnimatePresence>{showMore && <motion.div className="quick-prompts extras" initial={{height:0,opacity:0}} animate={{height:'auto',opacity:1}} exit={{height:0,opacity:0}}>{extraPrompts.map(([label, prompt]) => <button key={label} onClick={() => void send(prompt, label)} disabled={busy}>{label}</button>)}</motion.div>}</AnimatePresence>
-            </section>
+      <section className="tutor-tools" aria-label="Herramientas del tutor">
+        <div className="response-length-control"><span>Extensión</span><button className={responseLength === 'short' ? 'active' : ''} onClick={() => chooseLength('short')}>Corta</button><button className={responseLength === 'medium' ? 'active' : ''} onClick={() => chooseLength('medium')}>Media</button><button className={responseLength === 'long' ? 'active' : ''} onClick={() => chooseLength('long')}>Larga</button></div>
+        <div className="quick-prompts primary">{primaryPrompts.map(([label, prompt]) => <button key={label} onClick={() => void send(prompt, label)} disabled={busy}>{label}</button>)}</div>
+        <button className="more-tools" onClick={() => setShowMore(v => !v)}>{showMore ? 'Ocultar herramientas' : 'Más herramientas'}</button>
+        <AnimatePresence>{showMore && <motion.div className="quick-prompts extras" initial={{height:0,opacity:0}} animate={{height:'auto',opacity:1}} exit={{height:0,opacity:0}}>{extraPrompts.map(([label, prompt]) => <button key={label} onClick={() => void send(prompt, label)} disabled={busy}>{label}</button>)}</motion.div>}</AnimatePresence>
+      </section>
 
-            <div className="chat-log">
-              {messages.length === 0 && <div className="chat-empty"><strong>Trabaja directamente sobre el texto.</strong><span>Selecciona un fragmento y pide una explicación, una simplificación o una lectura más profunda. El Tutor recuperará contexto anterior sin adelantarse al libro.</span></div>}
-              {messages.map((m, i) => <article key={i} className={`message ${m.role}`}><span className={`source-chip ${m.role === 'assistant' ? 'ai' : 'reader'}`}>{m.role === 'assistant' ? 'IA' : 'TÚ'}</span>{m.role === 'assistant' ? <TutorRichText text={m.content}/> : <p>{m.content}</p>}{m.role === 'assistant' && <button className="speak-mini" onClick={() => void speak(m.content)}>Escuchar</button>}</article>)}
-              {busy && <article className="message assistant thinking"><span className="source-chip ai">IA</span><p>Analizando el pasaje, su contexto y tu historial de lectura…</p></article>}
-              <div ref={endRef} />
-            </div>
+      <div className="chat-log">
+        {messages.length === 0 && <div className="chat-empty"><strong>Trabaja directamente sobre el texto.</strong><span>Selecciona un fragmento y pide una explicación, simplificación o lectura más profunda.</span></div>}
+        {messages.map((m, i) => <article key={i} className={`message ${m.role}`}><span className={`source-chip ${m.role === 'assistant' ? 'ai' : 'reader'}`}>{m.role === 'assistant' ? 'IA' : 'TÚ'}</span>{m.role === 'assistant' ? <TutorRichText text={m.content}/> : <p>{m.content}</p>}{m.role === 'assistant' && <button className="speak-mini" onClick={() => void speak(m.content)}>Escuchar</button>}</article>)}
+        {busy && <article className="message assistant thinking"><span className="source-chip ai">IA</span><p>Analizando el pasaje, su contexto y tu historial de lectura…</p></article>}
+        <div ref={endRef} />
+      </div>
 
-            <form className="tutor-input" onSubmit={e => { e.preventDefault(); void send(input) }}>
-              <button type="button" className={listening ? 'mic active' : 'mic'} onClick={toggleVoice} aria-label="Dictar pregunta">{listening ? '■' : '◉'}</button>
-              <textarea rows={1} value={input} onChange={e => setInput(e.target.value)} placeholder="Pregunta sobre lo que estás leyendo…" />
-              <button type="submit" aria-label="Enviar" disabled={!input.trim() || busy}>↑</button>
-            </form>
-          </motion.aside>
-        </>
-      )}
-    </AnimatePresence>
-  )
+      {dictationStatus && <div className={`dictation-status ${listening ? 'recording' : ''}`}>{dictationStatus}</div>}
+      <form className="tutor-input" onSubmit={e => { e.preventDefault(); void send(input) }}>
+        <button type="button" className={listening ? 'mic active' : 'mic'} onClick={toggleVoice} aria-label={listening ? 'Terminar dictado' : 'Dictar pregunta'}>{listening ? '■' : '🎙'}</button>
+        <textarea rows={1} value={input} onChange={e => setInput(e.target.value)} placeholder="Escribe o dicta tu pregunta…" />
+        <button type="submit" aria-label="Enviar" disabled={!input.trim() || busy}>↑</button>
+      </form>
+    </motion.aside>
+  </>}</AnimatePresence>
 }
