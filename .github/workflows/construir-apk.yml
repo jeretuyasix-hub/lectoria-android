@@ -59,7 +59,7 @@ jobs:
       - name: Sincronizar Capacitor
         run: npx cap sync android
 
-      - name: Crear icono de libro abierto
+      - name: Crear icono adaptativo de libro abierto
         run: |
           python - <<'PY'
           from pathlib import Path
@@ -67,18 +67,21 @@ jobs:
           (res/'drawable').mkdir(parents=True,exist_ok=True)
           (res/'values').mkdir(parents=True,exist_ok=True)
           (res/'mipmap-anydpi-v26').mkdir(parents=True,exist_ok=True)
+          # Vector: resolución independiente. Todo el libro queda dentro de la zona segura central
+          # para que Android pueda recortarlo como círculo, squircle o cualquier máscara sin cortarlo.
           (res/'drawable'/'lectoria_book_foreground.xml').write_text('''<?xml version="1.0" encoding="utf-8"?>
           <vector xmlns:android="http://schemas.android.com/apk/res/android"
               android:width="108dp" android:height="108dp"
               android:viewportWidth="108" android:viewportHeight="108">
-            <path android:fillColor="#0F5F4F" android:pathData="M16,31 C28,25 40,25 51,33 L51,80 C40,72 28,71 16,76 Z"/>
-            <path android:fillColor="#146F5A" android:pathData="M57,33 C68,25 80,25 92,31 L92,76 C80,71 68,72 57,80 Z"/>
-            <path android:fillColor="#E2B955" android:pathData="M52.5,32 L55.5,32 L55.5,81 L52.5,81 Z"/>
-            <path android:fillColor="#FFFFFF" android:fillAlpha="0.30" android:pathData="M22,37 C31,34 40,35 47,40 L47,44 C39,40 31,39 22,42 Z"/>
-            <path android:fillColor="#FFFFFF" android:fillAlpha="0.30" android:pathData="M61,40 C68,35 77,34 86,37 L86,42 C77,39 69,40 61,44 Z"/>
+            <path android:fillColor="#0E5C4B" android:pathData="M31,39 C38,35 45,35 51,39 L51,71 C45,67 38,67 31,70 Z"/>
+            <path android:fillColor="#16715B" android:pathData="M57,39 C63,35 70,35 77,39 L77,70 C70,67 63,67 57,71 Z"/>
+            <path android:fillColor="#E1BA59" android:pathData="M52.5,38 L55.5,38 L55.5,72 L52.5,72 Z"/>
+            <path android:fillColor="#FFFFFF" android:fillAlpha="0.36" android:pathData="M35,44 C40,42 45,43 48,45 L48,48 C44,46 40,46 35,48 Z"/>
+            <path android:fillColor="#FFFFFF" android:fillAlpha="0.36" android:pathData="M60,45 C64,43 69,42 73,44 L73,48 C69,46 64,46 60,48 Z"/>
+            <path android:fillColor="#0A493C" android:fillAlpha="0.35" android:pathData="M31,70 C39,67 46,68 52,73 C45,70 38,70 31,73 Z"/>
+            <path android:fillColor="#0A493C" android:fillAlpha="0.35" android:pathData="M56,73 C62,68 69,67 77,70 L77,73 C70,70 63,70 56,73 Z"/>
           </vector>''')
-          values=res/'values'/'lectoria_launcher_colors.xml'
-          values.write_text('''<?xml version="1.0" encoding="utf-8"?><resources><color name="lectoria_icon_background">#F4EFE3</color></resources>''')
+          (res/'values'/'lectoria_launcher_colors.xml').write_text('''<?xml version="1.0" encoding="utf-8"?><resources><color name="lectoria_icon_background">#F4EFE3</color></resources>''')
           adaptive='''<?xml version="1.0" encoding="utf-8"?>
           <adaptive-icon xmlns:android="http://schemas.android.com/apk/res/android">
             <background android:drawable="@color/lectoria_icon_background"/>
@@ -88,15 +91,19 @@ jobs:
           (res/'mipmap-anydpi-v26'/'ic_launcher_round.xml').write_text(adaptive)
           PY
 
-      - name: Activar permiso de alarma exacta
+      - name: Activar permisos Android necesarios
         run: |
           python - <<'PY'
           from pathlib import Path
           p=Path('android/app/src/main/AndroidManifest.xml')
           s=p.read_text()
-          perm='<uses-permission android:name="android.permission.SCHEDULE_EXACT_ALARM" />'
-          if perm not in s:
-              s=s.replace('<application', perm+'\n    <application', 1)
+          permissions=[
+            '<uses-permission android:name="android.permission.SCHEDULE_EXACT_ALARM" />',
+            '<uses-permission android:name="android.permission.RECORD_AUDIO" />'
+          ]
+          for perm in permissions:
+              if perm not in s:
+                  s=s.replace('<application', perm+'\n    <application', 1)
           p.write_text(s)
           PY
 
