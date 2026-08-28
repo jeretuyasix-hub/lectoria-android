@@ -1,0 +1,194 @@
+/* Correcciones de interfaz móvil / Android */
+
+/* Android WebView puede heredar texto claro del tema del sistema aunque el fondo del campo sea blanco. */
+input,textarea,select{
+  color:#17342b;
+  -webkit-text-fill-color:#17342b;
+  caret-color:#12634f;
+  background-color:#fff;
+  color-scheme:light;
+}
+input::placeholder,textarea::placeholder{
+  color:#7a8882;
+  -webkit-text-fill-color:#7a8882;
+  opacity:1;
+}
+input:disabled,textarea:disabled,select:disabled{opacity:.62}
+
+/* Hojas inferiores: no usar translateX para centrar porque Framer Motion usa transform para el eje Y. */
+.tutor-panel,.settings-sheet,.study-sheet,.organize-sheet{
+  left:0;
+  right:0;
+  margin-inline:auto;
+  transform:none;
+  width:min(760px,100vw);
+  max-width:100vw;
+  overflow:hidden;
+}
+.tutor-backdrop{
+  position:fixed;
+  inset:0;
+  z-index:59;
+  border:0;
+  background:rgba(10,27,21,.22);
+  backdrop-filter:blur(2px);
+}
+.tutor-panel{
+  display:flex;
+  flex-direction:column;
+  max-height:min(88dvh,900px);
+  padding-bottom:env(safe-area-inset-bottom);
+}
+.tutor-header{flex:0 0 auto;min-width:0}
+.tutor-header>div{min-width:0}
+.tutor-header strong{font-size:1.08rem;color:#173f33}
+.tutor-header span{white-space:normal;line-height:1.3}
+.selection-preview{flex:0 0 auto;max-height:19dvh;overflow:auto;margin:8px 14px;padding:10px 12px}
+.selection-preview p{margin:.45rem 0 0;overflow-wrap:anywhere;line-height:1.45}
+.tutor-tools{flex:0 0 auto;border-bottom:1px solid #e1e5e1;padding-bottom:7px}
+.tutor-tools .quick-prompts{
+  display:grid;
+  grid-template-columns:repeat(2,minmax(0,1fr));
+  gap:7px;
+  overflow:visible;
+  padding:8px 14px 5px;
+}
+.tutor-tools .quick-prompts button{width:100%;white-space:normal;min-height:42px;padding:.55rem .65rem}
+.more-tools{display:block;margin:1px auto 2px;border:0;background:transparent;color:#216b55;font-weight:750;padding:.35rem .7rem}
+.chat-log{flex:1 1 auto;height:auto;max-height:none;min-height:0;padding:10px 14px;overscroll-behavior:contain}
+.chat-empty{display:flex;flex-direction:column;gap:7px;padding:18px 8px;color:#718079;line-height:1.45}
+.chat-empty strong{color:#31584b}
+.message{max-width:92%;overflow-wrap:anywhere;word-break:break-word}
+.message .source-chip{margin-bottom:6px}
+.message.user .source-chip.reader{background:#fff0c9;color:#6f5112}
+.message.user p{color:#fff}
+.tutor-input{flex:0 0 auto;align-items:flex-end;background:#f8f5ee;padding:9px 12px max(9px,env(safe-area-inset-bottom));gap:7px}
+.tutor-input textarea{
+  flex:1;
+  min-width:0;
+  min-height:43px;
+  max-height:110px;
+  resize:none;
+  border:1px solid #cfd8d2;
+  border-radius:14px;
+  padding:.68rem .8rem;
+  line-height:1.35;
+  outline:none;
+  overflow:auto;
+}
+.tutor-input textarea:focus{border-color:#4c8b76;box-shadow:0 0 0 3px rgba(34,111,85,.10)}
+.tutor-input button:disabled{opacity:.45;cursor:default}
+
+/* Menú de selección: siempre dentro del ancho útil. */
+.selection-actions{
+  left:12px;
+  right:12px;
+  width:auto;
+  max-width:none;
+  transform:none;
+  justify-content:flex-start;
+  overscroll-behavior-x:contain;
+  scrollbar-width:none;
+}
+.selection-actions::-webkit-scrollbar{display:none}
+.selection-actions button{flex:0 0 auto}
+
+/* Pantalla de inicio más orientada a leer que a tareas técnicas. */
+.library-header.redesigned{align-items:center}
+.library-heading{min-width:0}
+.library-actions-wrap{position:relative;flex:0 0 auto}
+.library-actions{align-items:center;flex-wrap:nowrap}
+.library-actions .add-book{display:flex;align-items:center;justify-content:center;white-space:nowrap}
+.more-button{display:flex;gap:6px;align-items:center;justify-content:center}
+.library-more-menu{
+  position:absolute;
+  z-index:30;
+  right:0;
+  top:calc(100% + 8px);
+  width:min(250px,78vw);
+  background:#fff;
+  border:1px solid #dde3df;
+  border-radius:15px;
+  padding:7px;
+  box-shadow:0 16px 44px rgba(18,48,39,.18);
+}
+.library-more-menu button,.library-more-menu label{
+  display:block;
+  width:100%;
+  text-align:left;
+  border:0;
+  background:transparent;
+  color:#214f40;
+  border-radius:10px;
+  padding:.75rem .8rem;
+  font-weight:700;
+  cursor:pointer;
+}
+.library-more-menu button:active,.library-more-menu label:active{background:#eef4f0}
+.continue-reading-card{
+  display:grid;
+  grid-template-columns:72px minmax(0,1fr) auto;
+  align-items:center;
+  gap:14px;
+  margin:14px 0;
+  padding:14px;
+  border-radius:20px;
+  background:#fff;
+  border:1px solid #dde4df;
+  box-shadow:0 10px 32px rgba(20,57,44,.08);
+  cursor:pointer;
+}
+.continue-cover{width:72px;height:98px;border-radius:10px;overflow:hidden;background:linear-gradient(145deg,#1c6f59,#0d4034);display:grid;place-items:center;color:#fff;font:700 2rem Georgia,serif}
+.continue-cover img{width:100%;height:100%;object-fit:cover}
+.continue-copy{min-width:0;display:flex;flex-direction:column;gap:4px}
+.continue-copy small{color:#2d7964;font-size:.65rem;font-weight:850;letter-spacing:.09em}
+.continue-copy strong{font-family:Georgia,serif;font-size:1.18rem;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;color:#163f32}
+.continue-copy span{color:#718079;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.continue-copy .progress-track{margin-top:5px}
+.continue-copy em{font-style:normal;font-size:.7rem;color:#718079}
+.continue-reading-card>button{border:0;border-radius:12px;background:#155f4d;color:#fff;padding:.72rem .9rem;font-weight:800}
+.empty-import{display:inline-flex;margin-top:12px}
+
+/* Evitar que las barras del lector desborden en teléfonos estrechos. */
+.reader-topbar{max-width:calc(100vw - 16px);overflow-x:auto;overscroll-behavior-x:contain;scrollbar-width:none}
+.reader-topbar::-webkit-scrollbar{display:none}
+.reader-topbar button{flex:0 0 auto;white-space:nowrap}
+.reader-bottombar{max-width:calc(100vw - 16px)}
+
+@media(max-width:700px){
+  .library-shell{padding:14px 14px max(18px,env(safe-area-inset-bottom))}
+  .library-header.redesigned{flex-direction:row;align-items:flex-start;gap:12px;margin-bottom:10px}
+  .library-header h1{font-size:clamp(2.15rem,11vw,3.25rem);line-height:.96}
+  .library-header p{font-size:.92rem;line-height:1.35}
+  .library-actions{gap:6px}
+  .library-actions .add-book{font-size:.86rem;padding:.72rem .78rem}
+  .more-button{width:44px;height:44px;padding:0;border-radius:13px}
+  .more-button span{display:none}
+  .continue-reading-card{grid-template-columns:58px minmax(0,1fr);gap:11px;padding:11px}
+  .continue-cover{width:58px;height:80px}
+  .continue-copy strong{font-size:1.05rem}
+  .continue-reading-card>button{grid-column:1/-1;width:100%;padding:.65rem}
+  .habit-summary{padding:12px;margin:11px 0}
+  .library-tools{margin:13px 0 10px;gap:8px}
+  .library-tools span{font-size:.78rem;white-space:nowrap}
+  .library-filters{margin-inline:-14px;padding-inline:14px}
+  .dropzone{display:none}
+  .book-grid{margin-top:14px}
+
+  .tutor-panel{width:100vw;max-height:90dvh;border-radius:22px 22px 0 0}
+  .tutor-header{padding:13px 14px 10px}
+  .tutor-header span{font-size:.72rem}
+  .chat-log{padding-inline:12px}
+  .message{max-width:94%;padding:9px 10px}
+  .tutor-input{padding-inline:10px}
+
+  .selection-actions{bottom:max(100px,calc(env(safe-area-inset-bottom) + 86px))}
+}
+
+@media(max-width:390px){
+  .library-header.redesigned{flex-direction:column}
+  .library-actions-wrap,.library-actions{width:100%}
+  .library-actions .add-book{flex:1}
+  .library-more-menu{left:0;right:auto}
+  .tutor-tools .quick-prompts{grid-template-columns:1fr 1fr}
+}
