@@ -1,6 +1,6 @@
 import { AnimatePresence, motion } from 'framer-motion'
-import { useEffect, useRef, useState } from 'react'
-import { askTutor, isAiConfigured, localTutorFallback } from '../lib/ai'
+import { useEffect, useRef, useState, type ReactNode } from 'react'
+import { askTutor, getAiEstimatedRemaining, isAiConfigured, localTutorFallback } from '../lib/ai'
 import { db } from '../lib/db'
 import { getTutorMemory, remember } from '../lib/memory'
 import { recordReadingEvent } from '../lib/history'
@@ -25,6 +25,30 @@ const extraPrompts = [
   ['Socrático', 'No me des todavía la respuesta. Hazme una sola pregunta socrática breve que compruebe si comprendí este fragmento.']
 ] as const
 
+function renderInline(text: string): ReactNode[] {
+  const parts = text.split(/(\*\*[^*]+\*\*|\*[^*]+\*|`[^`]+`)/g).filter(Boolean)
+  return parts.map((part, index) => {
+    if (part.startsWith('**') && part.endsWith('**')) return <strong key={index}>{part.slice(2, -2)}</strong>
+    if (part.startsWith('*') && part.endsWith('*')) return <em key={index}>{part.slice(1, -1)}</em>
+    if (part.startsWith('`') && part.endsWith('`')) return <code key={index}>{part.slice(1, -1)}</code>
+    return part
+  })
+}
+
+function TutorRichText({ text }: { text: string }) {
+  return <div className="tutor-rich-text">{text.split('\n').map((raw, index) => {
+    const line = raw.trim()
+    if (!line) return <div className="rich-gap" key={index}/>
+    if (line.startsWith('### ')) return <h4 key={index}>{renderInline(line.slice(4))}</h4>
+    if (line.startsWith('## ')) return <h3 key={index}>{renderInline(line.slice(3))}</h3>
+    if (line.startsWith('# ')) return <h2 key={index}>{renderInline(line.slice(2))}</h2>
+    if (/^[-•]\s+/.test(line)) return <div className="rich-bullet" key={index}><span>•</span><p>{renderInline(line.replace(/^[-•]\s+/, ''))}</p></div>
+    const numbered = line.match(/^(\d+)[.)]\s+(.+)$/)
+    if (numbered) return <div className="rich-bullet numbered" key={index}><span>{numbered[1]}.</span><p>{renderInline(numbered[2])}</p></div>
+    return <p key={index}>{renderInline(line)}</p>
+  })}</div>
+}
+
 export default function TutorPanel({ open, onClose, context, onConfigureAi }: { open: boolean; onClose: () => void; context: ReaderContext; onConfigureAi?: () => void }) {
   const [messages, setMessages] = useState<TutorMessage[]>([])
   const [input, setInput] = useState('')
@@ -33,6 +57,7 @@ export default function TutorPanel({ open, onClose, context, onConfigureAi }: { 
   const [showMore, setShowMore] = useState(false)
   const [showSelection, setShowSelection] = useState(false)
   const [aiReady, setAiReady] = useState(false)
+  const [remaining, setRemaining] = useState(getAiEstimatedRemaining())
   const recognition = useRef<SpeechRecognitionController | null>(null)
   const endRef = useRef<HTMLDivElement | null>(null)
 
@@ -44,8 +69,14 @@ export default function TutorPanel({ open, onClose, context, onConfigureAi }: { 
 
   useEffect(() => () => recognition.current?.stop(), [])
   useEffect(() => {
+    const update = () => setRemaining(getAiEstimatedRemaining())
+    window.addEventListener('lectoria-ai-usage', update)
+    return () => window.removeEventListener('lectoria-ai-usage', update)
+  }, [])
+  useEffect(() => {
     if (open) {
       setAiReady(isAiConfigured())
+      setRemaining(getAiEstimatedRemaining())
       window.setTimeout(() => endRef.current?.scrollIntoView({ block: 'end' }), 80)
     }
   }, [open, messages, busy])
@@ -76,11 +107,12 @@ export default function TutorPanel({ open, onClose, context, onConfigureAi }: { 
         setAiReady(configured)
         const fallback = localTutorFallback(enriched, trimmed)
         answer = configured
-          ? `No pude completar la consulta generativa en este intento. ${error instanceof Error && error.message && error.message !== 'AI_NOT_CONFIGURED' ? `Detalle: ${error.message}\n\n` : ''}${fallback}`
+          ? `### No se pudo completar la consulta\n\n${error instanceof Error && error.message && error.message !== 'AI_NOT_CONFIGURED' ? `**Detalle:** ${error.message}\n\n` : ''}${fallback}`
           : fallback
       }
       const assistantMessage: TutorMessage = { role: 'assistant', content: answer }
       setMessages([...uiNext, assistantMessage])
+      setRemaining(getAiEstimatedRemaining())
       await db.tutorMessages.add({ bookId: context.bookId, role: 'assistant', content: answer, createdAt: Date.now(), source: retrievedText ? 'book' : 'mixed' })
       void recordReadingEvent(context.bookId, 'tutor_answer', 'ai', { chapter: context.currentChapter, href: context.currentHref, progress: context.progress, text: answer.slice(0, 420) })
       await remember(context.bookId, 'Última pregunta', displayText.slice(0, 260))
@@ -119,7 +151,7 @@ export default function TutorPanel({ open, onClose, context, onConfigureAi }: { 
             </header>
 
             <div className={`ai-status ${aiReady ? 'connected' : 'local'}`}>
-              <span><b>{aiReady ? 'IA generativa conectada' : 'Modo local'}</b>{aiReady ? 'Analiza el fragmento con contexto y memoria.' : 'Conecta la IA para explicaciones interpretativas completas.'}</span>
+              <span><b>{aiReady ? 'IA generativa conectada' : 'Modo local'}</b>{aiReady ? `Saldo estimado: $${remaining.toFixed(2)}` : 'Conecta la IA para explicaciones interpretativas completas.'}</span>
               {!aiReady && onConfigureAi && <button onClick={onConfigureAi}>Conectar IA</button>}
             </div>
 
@@ -136,7 +168,7 @@ export default function TutorPanel({ open, onClose, context, onConfigureAi }: { 
 
             <div className="chat-log">
               {messages.length === 0 && <div className="chat-empty"><strong>Trabaja directamente sobre el texto.</strong><span>Selecciona un fragmento y pide una explicación, una simplificación o una lectura más profunda. El Tutor recuperará contexto anterior sin adelantarse al libro.</span></div>}
-              {messages.map((m, i) => <article key={i} className={`message ${m.role}`}><span className={`source-chip ${m.role === 'assistant' ? 'ai' : 'reader'}`}>{m.role === 'assistant' ? 'IA' : 'TÚ'}</span><p>{m.content}</p>{m.role === 'assistant' && <button className="speak-mini" onClick={() => speak(m.content)}>Escuchar</button>}</article>)}
+              {messages.map((m, i) => <article key={i} className={`message ${m.role}`}><span className={`source-chip ${m.role === 'assistant' ? 'ai' : 'reader'}`}>{m.role === 'assistant' ? 'IA' : 'TÚ'}</span>{m.role === 'assistant' ? <TutorRichText text={m.content}/> : <p>{m.content}</p>}{m.role === 'assistant' && <button className="speak-mini" onClick={() => void speak(m.content)}>Escuchar</button>}</article>)}
               {busy && <article className="message assistant thinking"><span className="source-chip ai">IA</span><p>Analizando el pasaje, su contexto y tu historial de lectura…</p></article>}
               <div ref={endRef} />
             </div>
