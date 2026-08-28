@@ -20,14 +20,16 @@ const quickPrompts = [
   ['Conectar', 'Relaciona este fragmento con ideas anteriores del libro que ya he leído.'],
   ['Traducir', 'Traduce el fragmento seleccionado al español si está en otro idioma; si ya está en español, pregunta a qué idioma quiero traducirlo.'],
   ['Socrático', 'No me des todavía la respuesta. Hazme una sola pregunta socrática breve para comprobar si comprendí este fragmento.']
-]
+] as const
 
 export default function TutorPanel({ open, onClose, context }: { open: boolean; onClose: () => void; context: ReaderContext }) {
   const [messages, setMessages] = useState<TutorMessage[]>([])
   const [input, setInput] = useState('')
   const [busy, setBusy] = useState(false)
   const [listening, setListening] = useState(false)
+  const [showMore, setShowMore] = useState(false)
   const recognition = useRef<SpeechRecognitionController | null>(null)
+  const endRef = useRef<HTMLDivElement | null>(null)
 
   useEffect(() => {
     void db.tutorMessages.where('bookId').equals(context.bookId).sortBy('createdAt').then(rows => {
@@ -36,6 +38,7 @@ export default function TutorPanel({ open, onClose, context }: { open: boolean; 
   }, [context.bookId])
 
   useEffect(() => () => recognition.current?.stop(), [])
+  useEffect(() => { if (open) window.setTimeout(() => endRef.current?.scrollIntoView({ block: 'end' }), 80) }, [open, messages, busy])
 
   async function send(content: string) {
     const trimmed = content.trim()
@@ -75,36 +78,48 @@ export default function TutorPanel({ open, onClose, context }: { open: boolean; 
       () => { setListening(false); recognition.current = null }
     )
     if (!controller) {
-      setInput(v => v || 'El reconocimiento de voz no está disponible en este navegador.')
+      setInput(v => v || 'El reconocimiento de voz no está disponible en este dispositivo.')
       return
     }
     recognition.current = controller
     setListening(true)
   }
 
+  const visiblePrompts = showMore ? quickPrompts : quickPrompts.slice(0, 4)
+
   return (
     <AnimatePresence>
       {open && (
-        <motion.aside className="tutor-panel" initial={{ y: '105%', opacity: 0 }} animate={{ y: 0, opacity: 1 }} exit={{ y: '105%', opacity: 0 }} transition={{ type: 'spring', stiffness: 360, damping: 34 }}>
-          <div className="tutor-grabber" />
-          <header className="tutor-header"><div><strong>Tutor</strong><span>Texto primero · contexto recuperado · antiespóiler</span></div><button onClick={onClose} aria-label="Cerrar tutor">×</button></header>
+        <>
+          <motion.button className="tutor-backdrop" aria-label="Cerrar tutor" onClick={onClose} initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }} />
+          <motion.aside className="tutor-panel" initial={{ y: '102%', opacity: .4 }} animate={{ y: 0, opacity: 1 }} exit={{ y: '102%', opacity: 0 }} transition={{ type: 'spring', stiffness: 390, damping: 38 }}>
+            <div className="tutor-grabber" />
+            <header className="tutor-header">
+              <div><strong>Tutor Lectoria</strong><span>Texto primero · contexto de lo leído · sin adelantos</span></div>
+              <button onClick={onClose} aria-label="Cerrar tutor">×</button>
+            </header>
 
-          {context.selectedText && <blockquote className="selection-preview">“{context.selectedText.slice(0, 300)}{context.selectedText.length > 300 ? '…' : ''}”</blockquote>}
+            {context.selectedText && <section className="selection-preview"><div className="source-chip book">LIBRO</div><p>“{context.selectedText.slice(0, 420)}{context.selectedText.length > 420 ? '…' : ''}”</p></section>}
 
-          <div className="quick-prompts">{quickPrompts.map(([label, prompt]) => <button key={label} onClick={() => void send(prompt)}>{label}</button>)}</div>
+            <section className="tutor-tools" aria-label="Herramientas del tutor">
+              <div className="quick-prompts">{visiblePrompts.map(([label, prompt]) => <button key={label} onClick={() => void send(prompt)} disabled={busy}>{label}</button>)}</div>
+              <button className="more-tools" onClick={() => setShowMore(v => !v)}>{showMore ? 'Menos herramientas' : 'Más herramientas'}</button>
+            </section>
 
-          <div className="chat-log">
-            {messages.length === 0 && <div className="chat-empty">Selecciona un pasaje o pregunta sobre lo leído. El tutor recuperará contexto del libro sin adelantarse a tu progreso.</div>}
-            {messages.map((m, i) => <div key={i} className={`message ${m.role}`}><p>{m.content}</p>{m.role === 'assistant' && <button className="speak-mini" onClick={() => speak(m.content)}>Escuchar</button>}</div>)}
-            {busy && <div className="message assistant"><p>Recuperando contexto y analizando…</p></div>}
-          </div>
+            <div className="chat-log">
+              {messages.length === 0 && <div className="chat-empty"><strong>¿Qué quieres trabajar?</strong><span>Selecciona un fragmento o escribe una pregunta. El tutor utilizará el texto leído, tus notas y el contexto disponible sin adelantarse al libro.</span></div>}
+              {messages.map((m, i) => <article key={i} className={`message ${m.role}`}><span className={`source-chip ${m.role === 'assistant' ? 'ai' : 'reader'}`}>{m.role === 'assistant' ? 'IA' : 'TÚ'}</span><p>{m.content}</p>{m.role === 'assistant' && <button className="speak-mini" onClick={() => speak(m.content)}>Escuchar</button>}</article>)}
+              {busy && <article className="message assistant"><span className="source-chip ai">IA</span><p>Recuperando contexto y analizando…</p></article>}
+              <div ref={endRef} />
+            </div>
 
-          <form className="tutor-input" onSubmit={e => { e.preventDefault(); void send(input) }}>
-            <button type="button" className={listening ? 'mic active' : 'mic'} onClick={toggleVoice} aria-label="Dictar pregunta">{listening ? '■' : '◉'}</button>
-            <input value={input} onChange={e => setInput(e.target.value)} placeholder="Pregunta sobre lo que estás leyendo…" />
-            <button type="submit" aria-label="Enviar">↑</button>
-          </form>
-        </motion.aside>
+            <form className="tutor-input" onSubmit={e => { e.preventDefault(); void send(input) }}>
+              <button type="button" className={listening ? 'mic active' : 'mic'} onClick={toggleVoice} aria-label="Dictar pregunta">{listening ? '■' : '◉'}</button>
+              <textarea rows={1} value={input} onChange={e => setInput(e.target.value)} placeholder="Pregunta sobre lo que estás leyendo…" />
+              <button type="submit" aria-label="Enviar" disabled={!input.trim() || busy}>↑</button>
+            </form>
+          </motion.aside>
+        </>
       )}
     </AnimatePresence>
   )
