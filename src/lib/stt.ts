@@ -1,3 +1,5 @@
+import { Capacitor } from '@capacitor/core'
+import { SpeechRecognition } from '@capgo/capacitor-speech-recognition'
 import { getAiConfig } from './ai'
 
 export interface SpeechRecognitionController {
@@ -23,11 +25,94 @@ function browserRecognition(onText: (text: string) => void, onEnd?: () => void, 
   return { stop: () => recognition.stop() }
 }
 
+function nativeRecognition(
+  onText: (text: string) => void,
+  onEnd?: () => void,
+  onError?: (message: string) => void
+): SpeechRecognitionController {
+  let latest = ''
+  let finished = false
+  let ready = false
+  let stopRequested = false
+  const handles: Array<{ remove: () => Promise<void> }> = []
+
+  const clean = () => { for (const handle of handles.splice(0)) void handle.remove().catch(() => undefined) }
+  const finish = () => {
+    if (finished) return
+    finished = true
+    clean()
+    onEnd?.()
+  }
+  const emitLatestAndFinish = async () => {
+    if (finished) return
+    try {
+      const last = await SpeechRecognition.getLastPartialResult()
+      const text = String(last?.text || last?.matches?.[0] || latest || '').trim()
+      if (text) onText(text)
+      else if (!latest) onError?.('No escuché suficiente voz. Inténtalo de nuevo.')
+    } catch {
+      if (latest) onText(latest)
+    } finally { finish() }
+  }
+  const stopNative = async () => {
+    if (finished) return
+    if (!ready) { stopRequested = true; return }
+    try { await SpeechRecognition.forceStop({ timeout: 900 }) }
+    catch { try { await SpeechRecognition.stop() } catch {} }
+    window.setTimeout(() => { void emitLatestAndFinish() }, 120)
+  }
+
+  void (async () => {
+    try {
+      const permissions = await SpeechRecognition.requestPermissions()
+      if (permissions.speechRecognition !== 'granted') throw new Error('Permiso de micrófono denegado.')
+      const support = await SpeechRecognition.available()
+      if (!support.available) throw new Error('El reconocimiento de voz no está disponible en este dispositivo.')
+      let useOnDeviceRecognition = false
+      try { useOnDeviceRecognition = (await SpeechRecognition.isOnDeviceRecognitionAvailable({ language: 'es-EC' })).available }
+      catch {}
+
+      handles.push(await SpeechRecognition.addListener('partialResults', event => {
+        const text = String(event.accumulatedText || event.matches?.[0] || event.accumulated || '').trim()
+        if (text) latest = text
+      }))
+      handles.push(await SpeechRecognition.addListener('error', event => {
+        if (finished) return
+        const code = String(event.code || '').toLowerCase()
+        if (code.includes('no_match') || code.includes('speech_timeout')) onError?.('No escuché suficiente voz. Inténtalo de nuevo.')
+        else onError?.('El reconocimiento de voz se interrumpió. Vuelve a intentarlo.')
+      }))
+      handles.push(await SpeechRecognition.addListener('listeningState', event => {
+        if (event.status === 'stopped' || event.state === 'stopped') void emitLatestAndFinish()
+      }))
+
+      ready = true
+      await SpeechRecognition.start({
+        language: 'es-EC',
+        maxResults: 1,
+        partialResults: true,
+        popup: false,
+        useOnDeviceRecognition,
+        allowForSilence: 1800,
+        muteRecognizerBeep: true
+      })
+      if (stopRequested) void stopNative()
+    } catch (error) {
+      onError?.(error instanceof Error ? error.message : 'No se pudo iniciar el dictado.')
+      finish()
+    }
+  })()
+
+  return { stop: () => { void stopNative() } }
+}
+
 export function startSpeechRecognition(
   onText: (text: string) => void,
   onEnd?: () => void,
   onError?: (message: string) => void
 ): SpeechRecognitionController | null {
+  if (Capacitor.isNativePlatform()) return nativeRecognition(onText, onEnd, onError)
+
   const config = getAiConfig()
   const canRecord = typeof MediaRecorder !== 'undefined' && Boolean(navigator.mediaDevices) && Boolean(config.apiKey)
   if (!canRecord) return browserRecognition(onText, onEnd, onError)
