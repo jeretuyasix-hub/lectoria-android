@@ -29,7 +29,7 @@ export function startSpeechRecognition(
   onError?: (message: string) => void
 ): SpeechRecognitionController | null {
   const config = getAiConfig()
-  const canRecord = Boolean(navigator.mediaDevices?.getUserMedia && 'MediaRecorder' in window && config.apiKey)
+  const canRecord = typeof MediaRecorder !== 'undefined' && Boolean(navigator.mediaDevices) && Boolean(config.apiKey)
   if (!canRecord) return browserRecognition(onText, onEnd, onError)
 
   let recorder: MediaRecorder | null = null
@@ -37,6 +37,7 @@ export function startSpeechRecognition(
   let chunks: BlobPart[] = []
   let stoppedBeforeReady = false
   let finished = false
+  let fallbackController: SpeechRecognitionController | null = null
 
   const finish = () => {
     if (finished) return
@@ -78,14 +79,14 @@ export function startSpeechRecognition(
       }
       recorder.start(180)
     } catch {
-      const fallback = browserRecognition(onText, onEnd, onError)
-      if (!fallback) { onError?.('El micrófono no está disponible en este dispositivo.'); finish() }
-      else recorder = null
+      fallbackController = browserRecognition(onText, onEnd, onError)
+      if (!fallbackController) { onError?.('El micrófono no está disponible en este dispositivo.'); finish() }
     }
   })()
 
   return {
     stop: () => {
+      if (fallbackController) { fallbackController.stop(); return }
       if (!recorder) { stoppedBeforeReady = true; return }
       if (recorder.state !== 'inactive') recorder.stop()
     }
