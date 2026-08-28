@@ -19,6 +19,7 @@ export default function Library({ onOpen }: { onOpen: (book: BookRecord) => void
   const [filter, setFilter] = useState<'all' | 'favorite' | 'queued' | 'reading' | 'read'>('all')
   const [editingBook, setEditingBook] = useState<BookRecord | null>(null)
   const [habitOpen, setHabitOpen] = useState(false)
+  const [moreOpen, setMoreOpen] = useState(false)
   const [habitSettings, setHabitSettings] = useState<HabitSettings>(DEFAULT_HABIT_SETTINGS)
   const [habitStats, setHabitStats] = useState({ todayMinutes: 0, dailyGoalMinutes: DEFAULT_HABIT_SETTINGS.dailyGoalMinutes, progress: 0, streak: 0 })
   const [reminderBanner, setReminderBanner] = useState('')
@@ -33,6 +34,7 @@ export default function Library({ onOpen }: { onOpen: (book: BookRecord) => void
   }, [])
   useEffect(() => startReminderEngine(habitSettings), [habitSettings])
 
+  const continueBook = useMemo(() => books.find(b => b.progress > .001 && b.progress < .985) || books[0], [books])
   const filtered = useMemo(() => {
     const q = query.trim().toLowerCase()
     return books.filter(b => {
@@ -58,30 +60,19 @@ export default function Library({ onOpen }: { onOpen: (book: BookRecord) => void
           const reader = new FileReader(); reader.onload = () => resolve(String(reader.result)); reader.onerror = reject; reader.readAsDataURL(blob)
         })
       }
-    } catch { /* optional */ }
+    } catch { /* portada opcional */ }
 
     const record: BookRecord = {
-      id: uid(),
-      title: meta.title || file.name.replace(/\.epub$/i, ''),
-      author: meta.creator || 'Autor desconocido',
-      cover,
-      file,
-      progress: 0,
-      addedAt: Date.now(),
-      lastOpenedAt: Date.now(),
-      indexingStatus: 'pending',
-      type: 'essay',
-      readingStatus: 'queued',
-      favorite: false,
+      id: uid(), title: meta.title || file.name.replace(/\.epub$/i, ''), author: meta.creator || 'Autor desconocido', cover, file,
+      progress: 0, addedAt: Date.now(), lastOpenedAt: Date.now(), indexingStatus: 'pending', type: 'essay', readingStatus: 'queued', favorite: false,
     }
     await db.books.put(record)
     try { book.destroy() } catch { /* noop */ }
     await refresh()
 
     setIndexing(v => ({ ...v, [record.id]: 0 }))
-    try {
-      await indexBook(record, p => setIndexing(v => ({ ...v, [record.id]: p })))
-    } finally {
+    try { await indexBook(record, p => setIndexing(v => ({ ...v, [record.id]: p }))) }
+    finally {
       setIndexing(v => { const next = { ...v }; delete next[record.id]; return next })
       await refresh()
     }
@@ -102,34 +93,19 @@ export default function Library({ onOpen }: { onOpen: (book: BookRecord) => void
       for (const book of restored) {
         setIndexing(v => ({ ...v, [book.id]: 0 }))
         try { await indexBook(book, p => setIndexing(v => ({ ...v, [book.id]: p }))) }
-        catch { /* the book remains readable even if indexing fails */ }
+        catch { /* el libro sigue siendo legible */ }
         finally { setIndexing(v => { const next = { ...v }; delete next[book.id]; return next }); await refresh() }
       }
     } catch (err) { setError(err instanceof Error ? err.message : 'No se pudo restaurar el respaldo.') }
   }
 
-
-  async function importDemo() {
-    setError('')
-    try {
-      const response = await fetch('/demo.epub')
-      if (!response.ok) throw new Error('No se encontró el EPUB de demostración.')
-      const blob = await response.blob()
-      await importFile(new File([blob], 'demostracion-lector-ia.epub', { type: 'application/epub+zip' }))
-    } catch (err) { setError(err instanceof Error ? err.message : 'No se pudo abrir la demostración.') }
-  }
-
   async function removeBook(book: BookRecord) {
-    if (!window.confirm(`Eliminar “${book.title}” y sus anotaciones locales?`)) return
+    if (!window.confirm(`¿Eliminar “${book.title}” y sus anotaciones locales?`)) return
     await db.transaction('rw', [db.books, db.highlights, db.chunks, db.tutorMessages, db.tutorMemory, db.studyArtifacts, db.readingEvents, db.readingSessions], async () => {
       await Promise.all([
-        db.books.delete(book.id),
-        db.highlights.where('bookId').equals(book.id).delete(),
-        db.chunks.where('bookId').equals(book.id).delete(),
-        db.tutorMessages.where('bookId').equals(book.id).delete(),
-        db.tutorMemory.where('bookId').equals(book.id).delete(),
-        db.studyArtifacts.where('bookId').equals(book.id).delete(),
-        db.readingEvents.where('bookId').equals(book.id).delete(),
+        db.books.delete(book.id), db.highlights.where('bookId').equals(book.id).delete(), db.chunks.where('bookId').equals(book.id).delete(),
+        db.tutorMessages.where('bookId').equals(book.id).delete(), db.tutorMemory.where('bookId').equals(book.id).delete(),
+        db.studyArtifacts.where('bookId').equals(book.id).delete(), db.readingEvents.where('bookId').equals(book.id).delete(),
         db.readingSessions.where('bookId').equals(book.id).delete()
       ])
     })
@@ -137,25 +113,40 @@ export default function Library({ onOpen }: { onOpen: (book: BookRecord) => void
   }
 
   return <main className="library-shell">
-    <section className="library-header">
-      <div><div className="eyebrow">LECTOR IA</div><h1>Tu biblioteca</h1><p>Lectura profunda, voz y tutoría contextual sin abandonar el libro.</p></div>
-      <div className="library-actions"><button className="secondary-button habit-button" onClick={() => setHabitOpen(true)}>◷ Hábito</button><button className="secondary-button" onClick={() => void importDemo()}>Demo</button><button className="secondary-button" onClick={() => void downloadBackup()}>Respaldar</button><label className="secondary-button restore-button">Restaurar<input type="file" accept=".lectoria,application/octet-stream" hidden onChange={e => e.target.files?.[0] && void restore(e.target.files[0])}/></label><label className="import-button">Importar EPUB<input type="file" multiple accept=".epub,application/epub+zip" hidden onChange={e => e.target.files && void importFiles(e.target.files)} /></label></div>
+    <section className="library-header redesigned">
+      <div className="library-heading"><div className="eyebrow">LECTORIA</div><h1>Tu biblioteca</h1><p>Lee, piensa, anota y conversa con el texto.</p></div>
+      <div className="library-actions-wrap">
+        <div className="library-actions">
+          <label className="import-button add-book">＋ Añadir libro<input type="file" multiple accept=".epub,application/epub+zip" hidden onChange={e => e.target.files && void importFiles(e.target.files)} /></label>
+          <button className="secondary-button more-button" onClick={() => setMoreOpen(v => !v)} aria-expanded={moreOpen}>••• <span>Más</span></button>
+        </div>
+        {moreOpen && <div className="library-more-menu"><button onClick={() => { setMoreOpen(false); void downloadBackup() }}>Crear respaldo</button><label>Restaurar respaldo<input type="file" accept=".lectoria,application/octet-stream" hidden onChange={e => { setMoreOpen(false); if (e.target.files?.[0]) void restore(e.target.files[0]) }} /></label></div>}
+      </div>
     </section>
 
     {error && <div className="error-banner">{error}</div>}
     {reminderBanner && <div className="reading-reminder-banner"><div><strong>Momento de leer</strong><span>{reminderBanner}</span></div><button onClick={() => setReminderBanner('')}>×</button></div>}
-    <section className="habit-summary" onClick={() => setHabitOpen(true)} role="button" tabIndex={0} onKeyDown={e => e.key === 'Enter' && setHabitOpen(true)}><div className="habit-ring" style={{ '--habit-progress': `${Math.round(habitStats.progress * 360)}deg` } as CSSProperties}><span>{habitStats.todayMinutes}</span></div><div><strong>{habitStats.todayMinutes} de {habitStats.dailyGoalMinutes} min hoy</strong><span>{habitStats.streak > 0 ? `🔥 ${habitStats.streak} días de continuidad` : 'Tu racha empieza cuando alcanzas tu meta.'}</span></div><button>Configurar</button></section>
-    <section className="library-tools"><input value={query} onChange={e => setQuery(e.target.value)} placeholder="Buscar por título, autor, colección o etiqueta…"/><span>{books.length} {books.length === 1 ? 'libro' : 'libros'}</span></section>
-    <nav className="library-filters"><button className={filter === 'all' ? 'active' : ''} onClick={() => setFilter('all')}>Todos</button><button className={filter === 'favorite' ? 'active' : ''} onClick={() => setFilter('favorite')}>★ Favoritos</button><button className={filter === 'reading' ? 'active' : ''} onClick={() => setFilter('reading')}>Leyendo</button><button className={filter === 'queued' ? 'active' : ''} onClick={() => setFilter('queued')}>Pendientes</button><button className={filter === 'read' ? 'active' : ''} onClick={() => setFilter('read')}>Leídos</button></nav>
 
-    <section className={`dropzone ${dragging ? 'dragging' : ''}`} onDragOver={e => { e.preventDefault(); setDragging(true) }} onDragLeave={() => setDragging(false)} onDrop={e => { e.preventDefault(); setDragging(false); if (e.dataTransfer.files?.length) void importFiles(e.dataTransfer.files) }}>Arrastra aquí uno o varios archivos EPUB</section>
+    {continueBook && <section className="continue-reading-card" onClick={() => onOpen(continueBook)} role="button" tabIndex={0} onKeyDown={e => e.key === 'Enter' && onOpen(continueBook)}>
+      <div className="continue-cover">{continueBook.cover ? <img src={continueBook.cover} alt="" /> : <span>{continueBook.title.slice(0, 1)}</span>}</div>
+      <div className="continue-copy"><small>{continueBook.progress > .001 ? 'CONTINUAR LEYENDO' : 'EMPEZAR A LEER'}</small><strong>{continueBook.title}</strong><span>{continueBook.author}</span><div className="progress-track"><div className="progress-fill" style={{ width: `${Math.round(continueBook.progress * 100)}%` }} /></div><em>{Math.round(continueBook.progress * 100)} % leído</em></div>
+      <button>Continuar</button>
+    </section>}
 
-    {books.length === 0 ? <section className="empty-state"><div className="empty-book">Aa</div><h2>Aún no hay libros</h2><p>Importa tu primer EPUB para comenzar.</p></section> : <section className="book-grid">
+    <section className="habit-summary" onClick={() => setHabitOpen(true)} role="button" tabIndex={0} onKeyDown={e => e.key === 'Enter' && setHabitOpen(true)}><div className="habit-ring" style={{ '--habit-progress': `${Math.round(habitStats.progress * 360)}deg` } as CSSProperties}><span>{habitStats.todayMinutes}</span></div><div><strong>{habitStats.todayMinutes} de {habitStats.dailyGoalMinutes} min hoy</strong><span>{habitStats.streak > 0 ? `🔥 ${habitStats.streak} días de continuidad` : 'Tu racha empieza cuando alcanzas tu meta.'}</span></div><button>Ver hábitos</button></section>
+
+    {books.length > 0 && <>
+      <section className="library-tools"><input value={query} onChange={e => setQuery(e.target.value)} placeholder="Buscar en tu biblioteca…"/><span>{books.length} {books.length === 1 ? 'libro' : 'libros'}</span></section>
+      <nav className="library-filters"><button className={filter === 'all' ? 'active' : ''} onClick={() => setFilter('all')}>Todos</button><button className={filter === 'favorite' ? 'active' : ''} onClick={() => setFilter('favorite')}>★ Favoritos</button><button className={filter === 'reading' ? 'active' : ''} onClick={() => setFilter('reading')}>Leyendo</button><button className={filter === 'queued' ? 'active' : ''} onClick={() => setFilter('queued')}>Pendientes</button><button className={filter === 'read' ? 'active' : ''} onClick={() => setFilter('read')}>Leídos</button></nav>
+      <section className={`dropzone ${dragging ? 'dragging' : ''}`} onDragOver={e => { e.preventDefault(); setDragging(true) }} onDragLeave={() => setDragging(false)} onDrop={e => { e.preventDefault(); setDragging(false); if (e.dataTransfer.files?.length) void importFiles(e.dataTransfer.files) }}>Arrastra aquí uno o varios archivos EPUB</section>
+    </>}
+
+    {books.length === 0 ? <section className="empty-state"><div className="empty-book">Aa</div><h2>Tu biblioteca está vacía</h2><p>Añade un EPUB para comenzar a leer.</p><label className="import-button empty-import">＋ Añadir mi primer libro<input type="file" multiple accept=".epub,application/epub+zip" hidden onChange={e => e.target.files && void importFiles(e.target.files)} /></label></section> : <section className="book-grid">
       {filtered.map(book => {
         const p = indexing[book.id]
         return <article key={book.id} className="book-card-wrap"><button className="book-card" onClick={() => onOpen(book)}>
-          <div className="cover-wrap">{book.cover ? <img src={book.cover} alt="" className="cover" /> : <div className="cover placeholder">{book.title.slice(0, 1)}</div>}<span className={`index-badge ${book.indexingStatus ?? 'pending'}`}>{typeof p === 'number' ? `Indexando ${Math.round(p * 100)}%` : book.indexingStatus === 'ready' ? 'IA lista' : book.indexingStatus === 'error' ? 'Índice pendiente' : 'Preparando'}</span></div>
-          <strong>{book.favorite ? '★ ' : ''}{book.title}</strong><span>{book.author}{book.collection ? ` · ${book.collection}` : ''}</span><div className="progress-track"><div className="progress-fill" style={{ width: `${Math.round(book.progress * 100)}%` }} /></div><small>{Math.round(book.progress * 100)}% leído</small>
+          <div className="cover-wrap">{book.cover ? <img src={book.cover} alt="" className="cover" /> : <div className="cover placeholder">{book.title.slice(0, 1)}</div>}<span className={`index-badge ${book.indexingStatus ?? 'pending'}`}>{typeof p === 'number' ? `Indexando ${Math.round(p * 100)}%` : book.indexingStatus === 'ready' ? 'Tutor listo' : book.indexingStatus === 'error' ? 'Índice pendiente' : 'Preparando'}</span></div>
+          <strong>{book.favorite ? '★ ' : ''}{book.title}</strong><span>{book.author}{book.collection ? ` · ${book.collection}` : ''}</span><div className="progress-track"><div className="progress-fill" style={{ width: `${Math.round(book.progress * 100)}%` }} /></div><small>{Math.round(book.progress * 100)} % leído</small>
         </button><button className="book-menu" aria-label="Organizar libro" onClick={() => setEditingBook(book)}>•••</button></article>
       })}
     </section>}
