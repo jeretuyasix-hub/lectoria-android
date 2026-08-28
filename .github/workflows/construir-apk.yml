@@ -59,9 +59,37 @@ jobs:
       - name: Sincronizar Capacitor
         run: npx cap sync android
 
+      - name: Crear icono de libro abierto
+        run: |
+          python - <<'PY'
+          from pathlib import Path
+          res=Path('android/app/src/main/res')
+          (res/'drawable').mkdir(parents=True,exist_ok=True)
+          (res/'values').mkdir(parents=True,exist_ok=True)
+          (res/'mipmap-anydpi-v26').mkdir(parents=True,exist_ok=True)
+          (res/'drawable'/'lectoria_book_foreground.xml').write_text('''<?xml version="1.0" encoding="utf-8"?>
+          <vector xmlns:android="http://schemas.android.com/apk/res/android"
+              android:width="108dp" android:height="108dp"
+              android:viewportWidth="108" android:viewportHeight="108">
+            <path android:fillColor="#0F5F4F" android:pathData="M16,31 C28,25 40,25 51,33 L51,80 C40,72 28,71 16,76 Z"/>
+            <path android:fillColor="#146F5A" android:pathData="M57,33 C68,25 80,25 92,31 L92,76 C80,71 68,72 57,80 Z"/>
+            <path android:fillColor="#E2B955" android:pathData="M52.5,32 L55.5,32 L55.5,81 L52.5,81 Z"/>
+            <path android:fillColor="#FFFFFF" android:fillAlpha="0.30" android:pathData="M22,37 C31,34 40,35 47,40 L47,44 C39,40 31,39 22,42 Z"/>
+            <path android:fillColor="#FFFFFF" android:fillAlpha="0.30" android:pathData="M61,40 C68,35 77,34 86,37 L86,42 C77,39 69,40 61,44 Z"/>
+          </vector>''')
+          values=res/'values'/'lectoria_launcher_colors.xml'
+          values.write_text('''<?xml version="1.0" encoding="utf-8"?><resources><color name="lectoria_icon_background">#F4EFE3</color></resources>''')
+          adaptive='''<?xml version="1.0" encoding="utf-8"?>
+          <adaptive-icon xmlns:android="http://schemas.android.com/apk/res/android">
+            <background android:drawable="@color/lectoria_icon_background"/>
+            <foreground android:drawable="@drawable/lectoria_book_foreground"/>
+          </adaptive-icon>'''
+          (res/'mipmap-anydpi-v26'/'ic_launcher.xml').write_text(adaptive)
+          (res/'mipmap-anydpi-v26'/'ic_launcher_round.xml').write_text(adaptive)
+          PY
+
       - name: Activar permiso de alarma exacta
         run: |
-          MANIFEST="android/app/src/main/AndroidManifest.xml"
           python - <<'PY'
           from pathlib import Path
           p=Path('android/app/src/main/AndroidManifest.xml')
