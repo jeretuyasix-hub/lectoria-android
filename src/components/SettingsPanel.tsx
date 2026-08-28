@@ -22,37 +22,28 @@ export default function SettingsPanel({ open, onClose, settings, onChange, bookT
 
   useEffect(() => {
     if (!open) return
-    const cfg = getAiConfig()
-    const currentUsage = getAiUsageLedger()
-    setApiKey(cfg.apiKey)
-    setModel(cfg.model)
-    setRememberKey(cfg.rememberKey)
-    setUsage(currentUsage)
-    setBalanceDraft(currentUsage.startingBalance.toFixed(2))
+    const cfg = getAiConfig(), currentUsage = getAiUsageLedger()
+    setApiKey(cfg.apiKey); setModel(cfg.model); setRememberKey(cfg.rememberKey)
+    setUsage(currentUsage); setBalanceDraft(currentUsage.startingBalance.toFixed(2))
     setAiStatus(cfg.apiKey ? 'Conexión guardada en este dispositivo.' : '')
   }, [open])
 
   useEffect(() => {
-    const update = (event: Event) => {
-      const detail = (event as CustomEvent<AiUsageLedger>).detail
-      setUsage(detail || getAiUsageLedger())
-    }
+    const update = (event: Event) => setUsage((event as CustomEvent<AiUsageLedger>).detail || getAiUsageLedger())
     window.addEventListener('lectoria-ai-usage', update)
     return () => window.removeEventListener('lectoria-ai-usage', update)
   }, [])
 
   async function connectAi() {
-    const config = { apiKey: apiKey.trim(), model, rememberKey }
+    const previous = getAiConfig()
+    const config = { apiKey: apiKey.trim(), model, rememberKey, responseLength: previous.responseLength }
     if (!config.apiKey) { setAiStatus('Escribe una clave API para conectar el Tutor.'); return }
     setTesting(true); setAiStatus('Comprobando conexión…')
     try {
       const result = await testAiConnection(config)
-      saveAiConfig(config)
-      setUsage(getAiUsageLedger())
-      setAiStatus(result || 'Conexión correcta.')
-    } catch (error) {
-      setAiStatus(error instanceof Error ? error.message : 'No se pudo conectar.')
-    } finally { setTesting(false) }
+      saveAiConfig(config); setUsage(getAiUsageLedger()); setAiStatus(result || 'Conexión correcta.')
+    } catch (error) { setAiStatus(error instanceof Error ? error.message : 'No se pudo conectar.') }
+    finally { setTesting(false) }
   }
 
   function disconnectAi() {
@@ -62,17 +53,28 @@ export default function SettingsPanel({ open, onClose, settings, onChange, bookT
   function commitBalance() {
     const value = Number(balanceDraft.replace(',', '.'))
     if (!Number.isFinite(value) || value < 0) { setBalanceDraft(usage.startingBalance.toFixed(2)); return }
-    const next = setAiStartingBalance(value)
-    setUsage(next)
-    setBalanceDraft(next.startingBalance.toFixed(2))
+    const next = setAiStartingBalance(value); setUsage(next); setBalanceDraft(next.startingBalance.toFixed(2))
   }
 
   const spent = usage.spentText + usage.spentAudio
   const remaining = Math.max(0, usage.startingBalance - spent)
+  const previewPalette = settings.theme === 'oled' ? { bg: '#000000', fg: '#f4f4f1', muted: '#b8bdb9' }
+    : settings.theme === 'dark' ? { bg: '#17211d', fg: '#edf1ee', muted: '#aab5af' }
+    : settings.theme === 'sepia' ? { bg: '#efe2c8', fg: '#3f3326', muted: '#786957' }
+    : { bg: '#fbf7ed', fg: '#17342b', muted: '#6f7c76' }
 
   return <AnimatePresence>{open && <motion.aside className="settings-sheet" initial={{ y: '105%', opacity: 0 }} animate={{ y: 0, opacity: 1 }} exit={{ y: '105%', opacity: 0 }} transition={{ type: 'spring', stiffness: 370, damping: 34 }}>
-    <div className="tutor-grabber"/><header className="side-header"><div><strong>Apariencia y lectura</strong><span>Preferencias guardadas en este dispositivo</span></div><button onClick={onClose}>×</button></header>
+    <div className="tutor-grabber"/><header className="side-header"><div><strong>Apariencia y lectura</strong><span>Los cambios se muestran en tiempo real</span></div><button onClick={onClose}>×</button></header>
     <div className="settings-grid">
+      <section className="reading-preview-card">
+        <div className="reading-preview-label"><b>Vista previa</b><span>{settings.fontSize}% · interlineado {settings.lineHeight.toFixed(2)} · margen {settings.margins}vw</span></div>
+        <div className="reading-preview-page" style={{ background: previewPalette.bg, color: previewPalette.fg, paddingInline: `${10 + settings.margins * 1.5}px` }}>
+          <strong style={{ fontSize: `${Math.max(14, 18 * settings.fontSize / 100)}px` }}>Una idea cambia cuando cambia la forma de leerla.</strong>
+          <p style={{ fontSize: `${Math.max(12, 15 * settings.fontSize / 100)}px`, lineHeight: settings.lineHeight }}>Este ejemplo reacciona al tamaño de letra, interlineado, márgenes y tema para que puedas decidir antes de volver al libro.</p>
+          <small style={{ color: previewPalette.muted }}>Lectoria · vista de lectura</small>
+        </div>
+      </section>
+
       <label><span>Tamaño de texto <b>{settings.fontSize}%</b></span><input type="range" min="80" max="160" value={settings.fontSize} onChange={e => set('fontSize', Number(e.target.value))}/></label>
       <label><span>Interlineado <b>{settings.lineHeight.toFixed(2)}</b></span><input type="range" min="1.35" max="2.15" step="0.05" value={settings.lineHeight} onChange={e => set('lineHeight', Number(e.target.value))}/></label>
       <label><span>Márgenes <b>{settings.margins}vw</b></span><input type="range" min="3" max="13" step="1" value={settings.margins} onChange={e => set('margins', Number(e.target.value))}/></label>
@@ -85,14 +87,12 @@ export default function SettingsPanel({ open, onClose, settings, onChange, bookT
 
       <section className="ai-config-card">
         <div className="ai-config-heading"><div><b>Tutor IA</b><small>Conexión generativa para análisis profundo</small></div><span className={apiKey ? 'ai-dot connected' : 'ai-dot'}/></div>
-
         <div className="ai-balance-card">
           <div className="ai-balance-main"><span>Saldo estimado</span><strong>${remaining.toFixed(2)}</strong></div>
-          <div className="ai-balance-details"><span>Gastado en texto <b>${usage.spentText.toFixed(4)}</b></span><span>Voz estimada <b>${usage.spentAudio.toFixed(4)}</b></span><span>Consultas registradas <b>{usage.requests}</b></span></div>
+          <div className="ai-balance-details"><span>Gastado en texto <b>${usage.spentText.toFixed(4)}</b></span><span>Voz y dictado estimados <b>${usage.spentAudio.toFixed(4)}</b></span><span>Consultas registradas <b>{usage.requests}</b></span></div>
           <label className="balance-reference"><span>Crédito de referencia (USD)</span><input type="number" min="0" step="0.01" inputMode="decimal" value={balanceDraft} onChange={e => setBalanceDraft(e.target.value)} onBlur={commitBalance}/></label>
-          <small>Estimación local desde las solicitudes registradas por Lectoria. No sustituye el saldo oficial de facturación de OpenAI.</small>
+          <small>Estimación local del consumo generado por Lectoria; no sustituye el saldo oficial de OpenAI.</small>
         </div>
-
         <label><span>Modelo</span><select value={model} onChange={e => setModel(e.target.value as AiModel)}><option value="gpt-5-mini">GPT-5 mini · recomendado</option><option value="gpt-5">GPT-5 · mayor profundidad</option></select></label>
         <label><span>Clave API de OpenAI</span><input className="api-key-input" type="password" value={apiKey} onChange={e => setApiKey(e.target.value)} autoCapitalize="none" autoCorrect="off" autoComplete="off" placeholder="sk-…"/></label>
         <label className="toggle-row ai-remember"><span><b>Recordar clave</b><small>Prototipo personal. Para la versión final usaremos un servidor seguro.</small></span><input type="checkbox" checked={rememberKey} onChange={e => setRememberKey(e.target.checked)}/></label>
