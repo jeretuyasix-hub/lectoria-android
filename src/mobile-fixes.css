@@ -155,6 +155,38 @@ input:disabled,textarea:disabled,select:disabled{opacity:.62}
 .reader-topbar button{flex:0 0 auto;white-space:nowrap}
 .reader-bottombar{max-width:calc(100vw - 16px)}
 
+/* OLED real: negro puro fuera y dentro del visor; el runtime aplica el texto claro al EPUB. */
+.reader-shell.theme-oled{background:#000;color:#f4f4f2}
+.reader-shell.theme-oled .epub-viewer{background:#000;box-shadow:none}
+.reader-shell.theme-dark{background:#111916;color:#edf1ee}
+
+/* Ajustes: una sola columna, controles siempre dentro de la pantalla. */
+.settings-sheet{display:flex;flex-direction:column;max-height:min(92dvh,900px)}
+.settings-sheet .side-header{flex:0 0 auto}
+.settings-grid{
+  width:100%;
+  min-width:0;
+  grid-template-columns:minmax(0,1fr);
+  align-content:start;
+  overflow-x:hidden;
+  max-height:calc(92dvh - 105px);
+}
+.settings-grid>label{width:100%;min-width:0;max-width:100%}
+.settings-grid>label>span{min-width:0;overflow-wrap:anywhere}
+.settings-grid input[type="range"]{display:block;width:100%;min-width:0;max-width:100%;margin:3px 0 0}
+.settings-grid select{display:block;width:100%;min-width:0;max-width:100%;height:52px;padding:.62rem .78rem;text-overflow:ellipsis}
+.settings-grid .toggle-row{
+  display:grid!important;
+  grid-template-columns:minmax(0,1fr) auto;
+  align-items:center;
+  gap:14px;
+  padding:.35rem 0 .55rem;
+}
+.settings-grid .toggle-row>span{display:flex;flex-direction:column;gap:3px;min-width:0;line-height:1.25}
+.settings-grid .toggle-row b{display:block;overflow-wrap:anywhere}
+.settings-grid .toggle-row small{display:block;color:#718079;line-height:1.35;overflow-wrap:anywhere}
+.settings-grid .toggle-row input[type="checkbox"]{width:24px;height:24px;margin:0;flex:0 0 auto}
+
 @media(max-width:700px){
   .library-shell{padding:14px 14px max(18px,env(safe-area-inset-bottom))}
   .library-header.redesigned{flex-direction:row;align-items:flex-start;gap:12px;margin-bottom:10px}
@@ -182,7 +214,28 @@ input:disabled,textarea:disabled,select:disabled{opacity:.62}
   .message{max-width:94%;padding:9px 10px}
   .tutor-input{padding-inline:10px}
 
-  .selection-actions{bottom:max(100px,calc(env(safe-area-inset-bottom) + 86px))}
+  .settings-sheet{width:100vw;max-height:92dvh;border-radius:22px 22px 0 0}
+  .settings-sheet .side-header{padding:14px 16px}
+  .settings-grid{padding:12px 16px 22px;gap:15px;max-height:calc(92dvh - 98px)}
+
+  .selection-actions{
+    bottom:max(100px,calc(env(safe-area-inset-bottom) + 86px));
+    display:grid;
+    grid-template-columns:repeat(4,minmax(0,1fr)) 38px;
+    gap:4px;
+    overflow:visible;
+    padding:6px;
+  }
+  .selection-actions button{
+    min-width:0;
+    width:100%;
+    padding:.58rem .18rem;
+    font-size:.82rem;
+    white-space:nowrap;
+    overflow:hidden;
+    text-overflow:ellipsis;
+  }
+  .selection-actions button:last-child{font-size:1.05rem;padding-inline:0}
 }
 
 @media(max-width:390px){
@@ -191,4 +244,7 @@ input:disabled,textarea:disabled,select:disabled{opacity:.62}
   .library-actions .add-book{flex:1}
   .library-more-menu{left:0;right:auto}
   .tutor-tools .quick-prompts{grid-template-columns:1fr 1fr}
+  .settings-grid{padding-inline:14px}
+  .selection-actions{left:8px;right:8px;grid-template-columns:repeat(4,minmax(0,1fr)) 34px}
+  .selection-actions button{font-size:.76rem}
 }
