@@ -27,7 +27,8 @@
     "@capacitor/core": "8.5.0",
     "@capacitor/android": "8.5.0",
     "@capacitor/local-notifications": "8.3.1",
-    "@capacitor/app": "^8.0.0"
+    "@capacitor/app": "^8.0.0",
+    "@capgo/capacitor-speech-recognition": "^8.1.10"
   },
   "devDependencies": {
     "@types/cors": "^2.8.17",
