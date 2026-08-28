@@ -1,135 +1,152 @@
 import type { ReaderContext, TutorMessage } from '../types'
 
-export async function askTutor(context: ReaderContext, messages: TutorMessage[]) {
-  const response = await fetch('/api/tutor', {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ context, messages })
-  })
+export type AiModel = 'gpt-5-mini' | 'gpt-5'
+export interface AiConfig {
+  apiKey: string
+  model: AiModel
+  rememberKey: boolean
+}
 
-  if (!response.ok) throw new Error('No se pudo consultar al tutor')
-  const data = await response.json()
-  return String(data.answer ?? '')
+const AI_CONFIG_KEY = 'lectoria-ai-config-v2'
+const AI_SESSION_KEY = 'lectoria-ai-session-key'
+
+export function getAiConfig(): AiConfig {
+  try {
+    const saved = JSON.parse(localStorage.getItem(AI_CONFIG_KEY) || '{}') as Partial<AiConfig>
+    const sessionKey = sessionStorage.getItem(AI_SESSION_KEY) || ''
+    return {
+      apiKey: saved.rememberKey ? String(saved.apiKey || '') : sessionKey,
+      model: saved.model === 'gpt-5' ? 'gpt-5' : 'gpt-5-mini',
+      rememberKey: Boolean(saved.rememberKey)
+    }
+  } catch {
+    return { apiKey: '', model: 'gpt-5-mini', rememberKey: false }
+  }
+}
+
+export function saveAiConfig(config: AiConfig) {
+  const cleanKey = config.apiKey.trim()
+  if (config.rememberKey) {
+    localStorage.setItem(AI_CONFIG_KEY, JSON.stringify({ apiKey: cleanKey, model: config.model, rememberKey: true }))
+    sessionStorage.removeItem(AI_SESSION_KEY)
+  } else {
+    localStorage.setItem(AI_CONFIG_KEY, JSON.stringify({ apiKey: '', model: config.model, rememberKey: false }))
+    if (cleanKey) sessionStorage.setItem(AI_SESSION_KEY, cleanKey)
+    else sessionStorage.removeItem(AI_SESSION_KEY)
+  }
+}
+
+export function clearAiConfig() {
+  localStorage.removeItem(AI_CONFIG_KEY)
+  sessionStorage.removeItem(AI_SESSION_KEY)
+}
+
+export function isAiConfigured() {
+  return Boolean(getAiConfig().apiKey)
+}
+
+function clip(text: string | undefined, max: number) {
+  const clean = (text || '').replace(/\s+/g, ' ').trim()
+  return clean.length > max ? `${clean.slice(0, max).trim()}…` : clean
+}
+
+function buildTutorInstructions(context: ReaderContext) {
+  return `Eres Tutor Lectoria, un tutor de lectura profunda en español. Tu trabajo no es resumir mecánicamente ni sustituir la lectura, sino ayudar a comprender con precisión el pasaje que el lector está trabajando.
+
+REGLAS EPISTÉMICAS
+1. TEXTO PRIMERO. El fragmento seleccionado es la evidencia principal. Analiza sus relaciones concretas, no una lista de palabras frecuentes.
+2. Distingue siempre entre: (a) lo que el autor afirma o puede sostenerse directamente por el texto; (b) tu inferencia interpretativa; (c) contexto externo. No atribuyas al autor una interpretación del lector o de la IA.
+3. No uses contenido posterior al progreso actual cuando la política sea estricta. No adelantes tesis, hechos narrativos ni desarrollos de capítulos futuros.
+4. Si el usuario pide EXPLICAR: empieza con "En otras palabras" y reformula la tesis del pasaje; luego explica paso a paso cómo se relacionan sus conceptos; termina con "Por qué importa aquí". Evita definiciones de diccionario si no ayudan al argumento.
+5. Si pide SIMPLIFICAR: conserva todas las relaciones lógicas importantes y reescribe en lenguaje más directo. No empobrezcas la tesis.
+6. Si pide PROFUNDIZAR: identifica presupuestos, oposición conceptual, consecuencia y problema filosófico/teórico que está en juego. Señala qué parte es interpretación.
+7. Si pide DEFINIR: define solo los conceptos decisivos y explica qué significan EN ESTE PASAJE, no solo en abstracto.
+8. Para EJEMPLOS, construye uno concreto y explica exactamente qué relación del pasaje representa y dónde deja de servir.
+9. Responde de forma fluida, pedagógica y específica. Evita bloques burocráticos, listas de términos sin relación y frases del tipo "configura el servidor".
+10. Si la selección parece incompleta, dilo y trabaja con lo disponible sin inventar el resto.
+
+LIBRO: ${context.title} — ${context.author}
+TIPO: ${context.bookType || 'no especificado'}
+CAPÍTULO ACTUAL: ${context.currentChapter || 'sin etiqueta'}
+PROGRESO: ${Math.round(context.progress * 100)}%
+POLÍTICA DE ADELANTOS: ${context.spoilerPolicy === 'strict' ? 'estricta: solo lo leído' : 'permitidos si son necesarios'}`
+}
+
+function buildTutorInput(context: ReaderContext, messages: TutorMessage[]) {
+  const recent = messages.slice(-10).map(m => `${m.role === 'user' ? 'LECTOR' : 'TUTOR'}: ${clip(m.content, 1200)}`).join('\n\n')
+  return `FRAGMENTO SELECCIONADO (fuente principal):\n${clip(context.selectedText, 5000) || '[No hay selección explícita]'}\n\nCONTEXTO CERCANO DE LA PÁGINA/CAPÍTULO:\n${clip(context.nearbyText, 4500) || '[No disponible]'}\n\nPASAJES ANTERIORES RECUPERADOS (solo contenido permitido por el progreso):\n${clip(context.retrievedText, 5000) || '[No se recuperaron pasajes adicionales]'}\n\nMEMORIA DE TRABAJO DEL LECTOR:\n${clip(context.memoryText, 2200) || '[Sin memoria relevante]'}\n\nCONVERSACIÓN RECIENTE:\n${recent || '[Primera intervención]'}\n\nResponde ahora a la última petición del lector, centrándote en el fragmento seleccionado.`
+}
+
+function extractResponseText(data: any) {
+  if (typeof data?.output_text === 'string' && data.output_text.trim()) return data.output_text.trim()
+  const parts: string[] = []
+  for (const item of data?.output || []) {
+    for (const content of item?.content || []) {
+      if ((content?.type === 'output_text' || content?.type === 'text') && typeof content?.text === 'string') parts.push(content.text)
+    }
+  }
+  return parts.join('\n').trim()
+}
+
+async function askOpenAI(context: ReaderContext, messages: TutorMessage[], config: AiConfig) {
+  const response = await fetch('https://api.openai.com/v1/responses', {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+      Authorization: `Bearer ${config.apiKey}`
+    },
+    body: JSON.stringify({
+      model: config.model,
+      instructions: buildTutorInstructions(context),
+      input: buildTutorInput(context, messages),
+      max_output_tokens: 1600,
+      store: false
+    })
+  })
+  if (!response.ok) {
+    let detail = ''
+    try { detail = String((await response.json())?.error?.message || '') } catch {}
+    throw new Error(detail || `OpenAI respondió ${response.status}`)
+  }
+  const answer = extractResponseText(await response.json())
+  if (!answer) throw new Error('La IA no devolvió texto.')
+  return answer
+}
+
+export async function testAiConnection(config: AiConfig) {
+  if (!config.apiKey.trim()) throw new Error('Escribe una clave API.')
+  const response = await fetch('https://api.openai.com/v1/responses', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${config.apiKey.trim()}` },
+    body: JSON.stringify({ model: config.model, input: 'Responde únicamente: Conexión correcta.', max_output_tokens: 30, store: false })
+  })
+  if (!response.ok) {
+    let detail = ''
+    try { detail = String((await response.json())?.error?.message || '') } catch {}
+    throw new Error(detail || `No se pudo conectar (${response.status}).`)
+  }
+  return extractResponseText(await response.json()) || 'Conexión correcta.'
+}
+
+export async function askTutor(context: ReaderContext, messages: TutorMessage[]) {
+  const config = getAiConfig()
+  if (!config.apiKey) throw new Error('AI_NOT_CONFIGURED')
+  return askOpenAI(context, messages, config)
 }
 
 function sentences(text: string) {
   return text.replace(/\s+/g, ' ').split(/(?<=[.!?])\s+/).map(s => s.trim()).filter(s => s.length > 18)
 }
 
-const stopwords = new Set([
-  'para','como','desde','hasta','entre','sobre','bajo','ante','tras','contra','durante','mediante','hacia','según','esta','este','estos','estas','esto','esas','esos','aquello','aquella','aquellos','aquellas','pero','porque','aunque','cuando','donde','quien','cual','cuales','todo','toda','todos','todas','solo','sólo','muy','más','menos','también','además','mismo','misma','mismos','mismas','otro','otra','otros','otras','cada','algún','alguna','algunos','algunas','ningún','ninguna','ser','estar','haber','tener','hacer','puede','pueden','debe','deben','forma','modo','parte','texto','fragmento','autor','libro','una','uno','unos','unas','del','las','los','que','por','con','sin','sus','sea','son','fue','han','hay','esa','ese','así','sino','ya','se','el','la','un','al','lo','en','y','o','a','e','u','de'
-])
-
-function keyTerms(text: string, max = 6) {
-  const words = text.toLowerCase().normalize('NFD').replace(/[\u0300-\u036f]/g, '').match(/[a-záéíóúñü]{5,}/gi) || []
-  const counts = new Map<string, number>()
-  for (const raw of words) {
-    const word = raw.toLowerCase()
-    if (stopwords.has(word)) continue
-    counts.set(word, (counts.get(word) || 0) + 1)
-  }
-  return [...counts.entries()].sort((a,b) => b[1] - a[1] || b[0].length - a[0].length).slice(0,max).map(([word]) => word)
-}
-
-function compact(text: string, max = 900) {
-  const clean = text.replace(/\s+/g, ' ').trim()
-  return clean.length > max ? `${clean.slice(0, max).trim()}…` : clean
-}
-
-function simplifiedLines(text: string) {
-  const source = sentences(text).slice(0, 4)
-  if (!source.length) return [compact(text, 420)]
-  return source.map(sentence => sentence
-    .replace(/[—–]/g, ', ')
-    .replace(/\(([^)]{0,120})\)/g, '$1')
-    .replace(/;\s*/g, '. ')
-    .replace(/\s+/g, ' ')
-    .trim())
-}
-
-const glossary: Record<string, string> = {
-  epistemologia: 'estudio de qué cuenta como conocimiento, cómo se justifica y cuáles son sus límites',
-  idealismo: 'familia de posiciones que concede un papel constitutivo o prioritario a la mente, las ideas o las formas de conciencia en la explicación de la realidad',
-  materialismo: 'familia de posiciones que explica la realidad partiendo de condiciones materiales y de procesos que no dependen de una conciencia que los constituya',
-  praxis: 'actividad práctica transformadora; en tradición marxista, unidad de acción, condiciones materiales y elaboración consciente',
-  dialectica: 'modo de análisis centrado en relaciones, tensiones, contradicciones y transformaciones históricas',
-  alienacion: 'separación o extrañamiento respecto de la propia actividad, sus productos, otras personas o las condiciones que organizan esa actividad',
-  ideologia: 'conjunto de representaciones y categorías socialmente situadas que pueden organizar la comprensión de la realidad y legitimar determinadas relaciones',
-  ontologia: 'estudio de qué tipos de entidades o formas de ser se consideran reales',
-  metafisica: 'investigación de los principios más generales de la realidad, su estructura y sus fundamentos',
-  empirismo: 'posición que concede un papel central a la experiencia sensible en la formación y justificación del conocimiento',
-  racionalismo: 'posición que concede un papel central a la razón y a estructuras conceptuales no reducibles a la experiencia inmediata',
-  fenomenologia: 'tradición que describe estructuras de la experiencia y de la aparición de los fenómenos desde la perspectiva de la conciencia'
-}
-
-function defineTerms(text: string) {
-  const terms = keyTerms(text, 7)
-  const rows = terms.map(term => {
-    const definition = glossary[term]
-    return definition ? `• ${term}: ${definition}.` : `• ${term}: término relevante en el pasaje; su sentido preciso debe fijarse por el uso que hace el autor en este contexto.`
-  })
-  return rows.length ? rows.join('\n') : `• No pude aislar términos técnicos con suficiente seguridad en este fragmento.`
-}
-
 export function localTutorFallback(context: ReaderContext, userPrompt: string) {
   const fragment = context.selectedText?.trim() || context.nearbyText?.trim() || context.retrievedText?.trim() || ''
-  if (!fragment) return 'Selecciona un fragmento o avanza en el libro para que pueda responder con contexto textual.'
-
-  const clean = compact(fragment)
+  if (!fragment) return 'Selecciona un fragmento para que pueda trabajar sobre el texto concreto.'
   const s = sentences(fragment)
-  const terms = keyTerms(fragment)
+  const central = s[0] || clip(fragment, 500)
   const lower = userPrompt.toLowerCase()
-  const central = s[0] || clean
-  const termLine = terms.length ? terms.join(', ') : 'los conceptos que aparecen en el pasaje'
-
-  if (lower.includes('explícame') || lower.includes('explica')) {
-    return `EXPLICACIÓN LOCAL\n\nIdea central del pasaje:\n${central}\n\nCómo está construido:\nEl fragmento articula su afirmación alrededor de ${termLine}. Conviene leerlo distinguiendo qué tesis formula, contra qué posición se dirige y qué relación establece entre esos conceptos.\n\nTexto de apoyo:\n“${clean}”`
-  }
-
-  if (lower.includes('reformula') || lower.includes('simplifica') || lower.includes('lenguaje más claro')) {
-    const lines = simplifiedLines(fragment).map(x => `• ${x}`).join('\n')
-    return `SIMPLIFICACIÓN LOCAL\n\nEn frases más directas:\n${lines}\n\nLa simplificación conserva el orden de las afirmaciones del pasaje; no añade contexto externo.`
-  }
-
-  if (lower.includes('profundiza') || lower.includes('presupuestos') || lower.includes('implicaciones')) {
-    const second = s[1] ? `\nUna segunda afirmación importante es: ${s[1]}` : ''
-    return `PROFUNDIZACIÓN LOCAL\n\nNúcleo conceptual: ${termLine}.\n\nLa pregunta de fondo que conviene hacerle al pasaje es qué tiene que aceptar previamente el autor para que la afirmación “${compact(central, 280)}” funcione como argumento.${second}\n\nPara profundizar sin adelantar el libro, revisa tres niveles: 1) qué oposición conceptual organiza el fragmento; 2) qué consecuencia se sigue si aceptamos la tesis; 3) qué cambiaría si negáramos esa premisa.`
-  }
-
-  if (lower.includes('identifica y define') || lower.includes('definir') || lower.includes('conceptos técnicos')) {
-    return `CONCEPTOS DEL PASAJE\n\n${defineTerms(fragment)}\n\nLas definiciones generales sirven como orientación. El sentido decisivo debe comprobarse siempre en el uso específico que hace el autor.`
-  }
-
-  if (lower.includes('ejemplo')) {
-    return `EJEMPLO — MODO LOCAL\n\nPuedo aislar la estructura del pasaje, pero no quiero inventar un ejemplo que altere su tesis. La afirmación que habría que ejemplificar es:\n“${compact(central, 360)}”\n\nÚsala como esquema: situación concreta → relación entre ${termLine} → consecuencia que muestra la tesis. Con un proveedor generativo conectado podré construir y evaluar el ejemplo completo.`
-  }
-
-  if (lower.includes('contextualiza') || lower.includes('contexto')) {
-    return `CONTEXTO — MODO LOCAL\n\nEl pasaje está trabajando principalmente con ${termLine}. En modo local puedo mantenerme dentro de lo ya leído, pero no añadiré datos históricos externos que no pueda verificar aquí.\n\nDentro del texto, la referencia principal es:\n“${compact(central, 420)}”`
-  }
-
-  if (lower.includes('contrasta') || lower.includes('alternativa')) {
-    return `CONTRASTE — MODO LOCAL\n\nTesis que debemos contrastar:\n“${compact(central, 360)}”\n\nContraste mínimo útil: pregunta qué explicación resultaría si se negara la prioridad que el pasaje concede a ${terms.slice(0,3).join(', ') || 'sus conceptos centrales'}. Después compara cuál de las dos posiciones explica más elementos del fragmento con menos supuestos añadidos.`
-  }
-
-  if (lower.includes('relaciona') || lower.includes('conectar') || lower.includes('ideas anteriores')) {
-    const memory = compact(context.memoryText || context.retrievedText || '', 600)
-    return memory
-      ? `CONEXIÓN CON LO YA LEÍDO\n\nEste fragmento gira alrededor de ${termLine}. En tu contexto recuperado aparecen estas pistas para conectarlo:\n${memory}`
-      : `CONEXIÓN CON LO YA LEÍDO\n\nEste fragmento gira alrededor de ${termLine}. Todavía no hay suficiente memoria recuperada para establecer una conexión fiable con pasajes anteriores sin inventarla.`
-  }
-
-  if (lower.includes('traduce')) {
-    return 'TRADUCCIÓN — MODO LOCAL\n\nLa traducción fiable requiere el proveedor generativo o un motor de traducción conectado. No voy a sustituir términos técnicos automáticamente y arriesgarme a cambiar su sentido.'
-  }
-
-  if (lower.includes('socrát') || lower.includes('no me des todavía la respuesta')) {
-    return `PREGUNTA SOCRÁTICA\n\nSi tuvieras que expresar en una sola frase qué relación establece este fragmento entre ${terms.slice(0,3).join(', ') || 'sus conceptos principales'}, ¿qué dirías y qué parte exacta del texto usarías como evidencia?`
-  }
-
-  if (lower.includes('resumen') || lower.includes('prepár') || lower.includes('prepar')) {
-    return `RESUMEN LOCAL\n\n${s.slice(0,4).map(x => `• ${x}`).join('\n') || clean}\n\nConceptos recurrentes: ${termLine}.`
-  }
-
-  return `RESPUESTA LOCAL\n\nHe recuperado el fragmento y su contexto textual. La afirmación principal disponible es:\n“${clean}”\n\nPara una respuesta interpretativa abierta necesito el proveedor generativo; mientras tanto, puedo Explicar, Simplificar, Profundizar, Definir y formular preguntas socráticas usando solo el texto disponible.`
+  if (lower.includes('simplifica') || lower.includes('reformula')) return `En otras palabras:\n\n${s.slice(0, 4).join(' ') || clip(fragment, 700)}\n\nEsta es una reformulación local del pasaje; para una explicación interpretativa completa conecta la IA desde Ajustes.`
+  if (lower.includes('defin')) return `El pasaje gira alrededor de una afirmación concreta: “${clip(central, 360)}”. Para definir los conceptos según el uso preciso del autor —y no mediante definiciones genéricas— conecta la IA desde Ajustes.`
+  if (lower.includes('profund')) return `El punto de partida es: “${clip(central, 360)}”. Una lectura más profunda debe reconstruir qué oposición organiza esta afirmación, qué presupone y qué consecuencia intenta establecer. Para hacerlo específicamente sobre este pasaje, conecta la IA desde Ajustes.`
+  if (lower.includes('explica')) return `En otras palabras, el pasaje parte de esta tesis: “${clip(central, 420)}”.\n\nPuedo recuperar y organizar el texto localmente, pero el análisis interpretativo fluido requiere conectar la IA desde Ajustes.`
+  return `He recuperado el pasaje seleccionado, pero esta función necesita la IA generativa para responder de forma interpretativa. Abre Aa → Tutor IA y conecta tu proveedor.`
 }
