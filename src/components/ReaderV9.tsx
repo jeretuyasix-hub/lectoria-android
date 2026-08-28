@@ -14,6 +14,16 @@ import { useReaderEngine } from './useReaderEngine'
 
 const COLORS=['#F5D547','#7ED9A8','#79B8FF','#F39AB5','#C7A6FF','#FFB46A','#B5E4E8','#D8D8D8']
 const LABELS:Record<HighlightCategory,string>={idea:'Idea',concept:'Concepto',question:'Pregunta',quote:'Cita',argument:'Argumento',evidence:'Evidencia',contradiction:'Contradicción'}
+type SelectionIcon='highlight'|'question'|'audio'|'note'|'close'
+
+function SelectionActionIcon({name}:{name:SelectionIcon}){
+  const common={width:24,height:24,viewBox:'0 0 24 24',fill:'none',stroke:'currentColor',strokeWidth:1.9,strokeLinecap:'round' as const,strokeLinejoin:'round' as const,'aria-hidden':true}
+  if(name==='highlight')return <svg {...common}><path d="m5 15 7.8-7.8 4 4L9 19H5v-4Z"/><path d="m14.5 5.5 4 4M4 21h16"/></svg>
+  if(name==='question')return <svg {...common}><path d="M20 11.2a7.8 7.8 0 0 1-8 7.6 9.5 9.5 0 0 1-3.2-.55L4 20l1.45-4.05A7.2 7.2 0 0 1 4 11.2a7.8 7.8 0 0 1 8-7.6 7.8 7.8 0 0 1 8 7.6Z"/><path d="M9.8 9a2.35 2.35 0 1 1 3.65 1.96c-.9.58-1.45 1.05-1.45 2.04M12 16h.01"/></svg>
+  if(name==='audio')return <svg {...common}><path d="M5 10v4h3l4 3V7l-4 3H5Z"/><path d="M16 9.5a4 4 0 0 1 0 5M18.5 7a7 7 0 0 1 0 10"/></svg>
+  if(name==='note')return <svg {...common}><path d="M5 4h10l4 4v12H5V4Z"/><path d="M14 4v5h5M8 13h8M8 16h6"/></svg>
+  return <svg {...common}><path d="M6 6l12 12M18 6 6 18"/></svg>
+}
 
 export default function ReaderV9({bookRecord,onBack}:{bookRecord:BookRecord;onBack:()=>void}){
   const [controls,setControls]=useState(false),[tutor,setTutor]=useState(false),[nav,setNav]=useState(false),[notes,setNotes]=useState(false),[study,setStudy]=useState(false),[prefs,setPrefs]=useState(false),[history,setHistory]=useState(false)
@@ -36,7 +46,22 @@ export default function ReaderV9({bookRecord,onBack}:{bookRecord:BookRecord;onBa
     <div ref={e.stage} className="reader-stage"><button className="tap-zone left" aria-label="Página anterior" onClick={x=>{x.stopPropagation();void e.navigatePage('prev')}}/><div ref={e.host} className="epub-viewer"/><button className="tap-zone right" aria-label="Página siguiente" onClick={x=>{x.stopPropagation();void e.navigatePage('next')}}/></div>
     <ReaderProgress progress={e.progress} chapter={e.chapter} location={e.location}/>
 
-    {e.selectedText&&!tutor&&<><motion.div className="selection-actions" initial={{scale:.95,opacity:0}} animate={{scale:1,opacity:1}}><button onClick={()=>setHighlightMenu(v=>!v)}>Subrayar</button><button onClick={()=>setTutor(true)}>Preguntar</button><button onClick={()=>speakInstant(e.selectedText,e.settings.ttsRate)}>Escuchar</button><button onClick={()=>void addNote()}>Nota</button><button onClick={()=>{e.clearSelection();setHighlightMenu(false)}}>×</button></motion.div>{highlightMenu&&<motion.section className="highlight-palette" initial={{y:8,opacity:0}} animate={{y:0,opacity:1}}><header><strong>Resaltado</strong><button onClick={()=>setHighlightMenu(false)}>×</button></header><div className="highlight-colors">{COLORS.map(c=><button key={c} aria-label={`Color ${c}`} className={color===c?'active':''} style={{background:c}} onClick={()=>setColor(c)}/>)}<label className="custom-color" title="Color personalizado"><input type="color" value={color} onChange={x=>setColor(x.target.value)}/><span>＋</span></label></div><label className="highlight-opacity"><span>Intensidad <b>{Math.round(opacity*100)}%</b></span><input type="range" min="20" max="90" step="5" value={Math.round(opacity*100)} onChange={x=>setOpacity(Number(x.target.value)/100)}/></label><div className="highlight-categories">{(Object.keys(LABELS) as HighlightCategory[]).map(c=><button key={c} className={category===c?'active':''} onClick={()=>setCategory(c)}>{LABELS[c]}</button>)}</div><button className="apply-highlight" onClick={()=>{void e.saveHighlight(category,color,opacity);setHighlightMenu(false)}}>Aplicar resaltado</button></motion.section>}</>}
+    {e.selectedText&&!tutor&&<>
+      <motion.div className="selection-actions selection-actions-icons" initial={{scale:.94,opacity:0,y:8}} animate={{scale:1,opacity:1,y:0}} transition={{type:'spring',stiffness:430,damping:30}}>
+        <motion.button className={highlightMenu?'active':''} aria-label="Resaltar texto" title="Resaltar" aria-pressed={highlightMenu} onClick={()=>setHighlightMenu(v=>!v)} whileTap={{scale:.86}}><SelectionActionIcon name="highlight"/></motion.button>
+        <motion.button aria-label="Preguntar al Tutor IA" title="Preguntar al Tutor" onClick={()=>setTutor(true)} whileTap={{scale:.86}}><SelectionActionIcon name="question"/></motion.button>
+        <motion.button aria-label="Escuchar texto seleccionado" title="Escuchar" onClick={()=>speakInstant(e.selectedText,e.settings.ttsRate)} whileTap={{scale:.86}}><SelectionActionIcon name="audio"/></motion.button>
+        <motion.button aria-label="Añadir nota" title="Nota" onClick={()=>void addNote()} whileTap={{scale:.86}}><SelectionActionIcon name="note"/></motion.button>
+        <motion.button aria-label="Cerrar acciones" title="Cerrar" onClick={()=>{e.clearSelection();setHighlightMenu(false)}} whileTap={{scale:.86}}><SelectionActionIcon name="close"/></motion.button>
+      </motion.div>
+      <AnimatePresence>{highlightMenu&&<motion.section className="highlight-palette" initial={{y:12,opacity:0,scale:.98}} animate={{y:0,opacity:1,scale:1}} exit={{y:8,opacity:0,scale:.98}} transition={{type:'spring',stiffness:380,damping:31}}>
+        <header><strong>Resaltado</strong><button aria-label="Cerrar paleta de resaltado" onClick={()=>setHighlightMenu(false)}>×</button></header>
+        <div className="highlight-colors">{COLORS.map(c=><button key={c} aria-label={`Color ${c}`} className={color===c?'active':''} style={{background:c}} onClick={()=>setColor(c)}/>)}<label className="custom-color" title="Color personalizado"><input aria-label="Elegir color personalizado" type="color" value={color} onChange={x=>setColor(x.target.value)}/><span>＋</span></label></div>
+        <label className="highlight-opacity"><span>Intensidad <b>{Math.round(opacity*100)}%</b></span><input type="range" min="20" max="90" step="5" value={Math.round(opacity*100)} onChange={x=>setOpacity(Number(x.target.value)/100)}/></label>
+        <div className="highlight-categories">{(Object.keys(LABELS) as HighlightCategory[]).map(c=><button key={c} className={category===c?'active':''} onClick={()=>setCategory(c)}>{LABELS[c]}</button>)}</div>
+        <button className="apply-highlight" onClick={()=>{void e.saveHighlight(category,color,opacity);setHighlightMenu(false)}}>Aplicar resaltado</button>
+      </motion.section>}</AnimatePresence>
+    </>}
 
     <NavigationPanel open={nav} onClose={()=>setNav(false)} toc={e.toc} bookId={bookRecord.id} progress={e.progress} strictSpoilers={e.settings.spoilerPolicy==='strict'} onNavigate={x=>{void e.rendition.current?.display(x);setNav(false)}}/>
     <NotebookPanel open={notes} onClose={()=>setNotes(false)} bookId={bookRecord.id} onNavigateHighlight={x=>{void e.rendition.current?.display(x);setNotes(false)}}/>
