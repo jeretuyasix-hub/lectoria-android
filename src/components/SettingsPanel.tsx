@@ -1,6 +1,6 @@
 import { AnimatePresence, motion } from 'framer-motion'
 import { useEffect, useState } from 'react'
-import { clearAiConfig, getAiConfig, saveAiConfig, testAiConnection, type AiModel } from '../lib/ai'
+import { clearAiConfig, getAiConfig, getAiUsageLedger, saveAiConfig, setAiStartingBalance, testAiConnection, type AiModel, type AiUsageLedger } from '../lib/ai'
 import type { BookRecord, PageMode, ReaderSettings, ThemeMode } from '../types'
 
 export default function SettingsPanel({ open, onClose, settings, onChange, bookType, onBookType }: {
@@ -17,15 +17,29 @@ export default function SettingsPanel({ open, onClose, settings, onChange, bookT
   const [rememberKey, setRememberKey] = useState(false)
   const [aiStatus, setAiStatus] = useState('')
   const [testing, setTesting] = useState(false)
+  const [usage, setUsage] = useState<AiUsageLedger>(getAiUsageLedger())
+  const [balanceDraft, setBalanceDraft] = useState('5.00')
 
   useEffect(() => {
     if (!open) return
     const cfg = getAiConfig()
+    const currentUsage = getAiUsageLedger()
     setApiKey(cfg.apiKey)
     setModel(cfg.model)
     setRememberKey(cfg.rememberKey)
+    setUsage(currentUsage)
+    setBalanceDraft(currentUsage.startingBalance.toFixed(2))
     setAiStatus(cfg.apiKey ? 'Conexión guardada en este dispositivo.' : '')
   }, [open])
+
+  useEffect(() => {
+    const update = (event: Event) => {
+      const detail = (event as CustomEvent<AiUsageLedger>).detail
+      setUsage(detail || getAiUsageLedger())
+    }
+    window.addEventListener('lectoria-ai-usage', update)
+    return () => window.removeEventListener('lectoria-ai-usage', update)
+  }, [])
 
   async function connectAi() {
     const config = { apiKey: apiKey.trim(), model, rememberKey }
@@ -34,6 +48,7 @@ export default function SettingsPanel({ open, onClose, settings, onChange, bookT
     try {
       const result = await testAiConnection(config)
       saveAiConfig(config)
+      setUsage(getAiUsageLedger())
       setAiStatus(result || 'Conexión correcta.')
     } catch (error) {
       setAiStatus(error instanceof Error ? error.message : 'No se pudo conectar.')
@@ -43,6 +58,17 @@ export default function SettingsPanel({ open, onClose, settings, onChange, bookT
   function disconnectAi() {
     clearAiConfig(); setApiKey(''); setRememberKey(false); setAiStatus('Tutor desconectado. Se usará el modo local.')
   }
+
+  function commitBalance() {
+    const value = Number(balanceDraft.replace(',', '.'))
+    if (!Number.isFinite(value) || value < 0) { setBalanceDraft(usage.startingBalance.toFixed(2)); return }
+    const next = setAiStartingBalance(value)
+    setUsage(next)
+    setBalanceDraft(next.startingBalance.toFixed(2))
+  }
+
+  const spent = usage.spentText + usage.spentAudio
+  const remaining = Math.max(0, usage.startingBalance - spent)
 
   return <AnimatePresence>{open && <motion.aside className="settings-sheet" initial={{ y: '105%', opacity: 0 }} animate={{ y: 0, opacity: 1 }} exit={{ y: '105%', opacity: 0 }} transition={{ type: 'spring', stiffness: 370, damping: 34 }}>
     <div className="tutor-grabber"/><header className="side-header"><div><strong>Apariencia y lectura</strong><span>Preferencias guardadas en este dispositivo</span></div><button onClick={onClose}>×</button></header>
@@ -59,6 +85,14 @@ export default function SettingsPanel({ open, onClose, settings, onChange, bookT
 
       <section className="ai-config-card">
         <div className="ai-config-heading"><div><b>Tutor IA</b><small>Conexión generativa para análisis profundo</small></div><span className={apiKey ? 'ai-dot connected' : 'ai-dot'}/></div>
+
+        <div className="ai-balance-card">
+          <div className="ai-balance-main"><span>Saldo estimado</span><strong>${remaining.toFixed(2)}</strong></div>
+          <div className="ai-balance-details"><span>Gastado en texto <b>${usage.spentText.toFixed(4)}</b></span><span>Voz estimada <b>${usage.spentAudio.toFixed(4)}</b></span><span>Consultas registradas <b>{usage.requests}</b></span></div>
+          <label className="balance-reference"><span>Crédito de referencia (USD)</span><input type="number" min="0" step="0.01" inputMode="decimal" value={balanceDraft} onChange={e => setBalanceDraft(e.target.value)} onBlur={commitBalance}/></label>
+          <small>Estimación local desde las solicitudes registradas por Lectoria. No sustituye el saldo oficial de facturación de OpenAI.</small>
+        </div>
+
         <label><span>Modelo</span><select value={model} onChange={e => setModel(e.target.value as AiModel)}><option value="gpt-5-mini">GPT-5 mini · recomendado</option><option value="gpt-5">GPT-5 · mayor profundidad</option></select></label>
         <label><span>Clave API de OpenAI</span><input className="api-key-input" type="password" value={apiKey} onChange={e => setApiKey(e.target.value)} autoCapitalize="none" autoCorrect="off" autoComplete="off" placeholder="sk-…"/></label>
         <label className="toggle-row ai-remember"><span><b>Recordar clave</b><small>Prototipo personal. Para la versión final usaremos un servidor seguro.</small></span><input type="checkbox" checked={rememberKey} onChange={e => setRememberKey(e.target.checked)}/></label>
