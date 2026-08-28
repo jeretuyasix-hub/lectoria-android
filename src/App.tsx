@@ -1,7 +1,7 @@
 import { useEffect, useState } from 'react'
 import { App as NativeApp } from '@capacitor/app'
 import Library from './components/Library'
-import Reader from './components/Reader'
+import Reader from './components/ReaderV9'
 import type { BookRecord } from './types'
 
 export default function App() {
