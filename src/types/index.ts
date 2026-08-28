@@ -33,6 +33,8 @@ export interface HighlightRecord {
   text: string
   note?: string
   category: HighlightCategory
+  color?: string
+  opacity?: number
   createdAt: number
 }
 
