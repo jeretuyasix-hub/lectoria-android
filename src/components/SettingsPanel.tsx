@@ -14,7 +14,6 @@ export default function SettingsPanel({ open, onClose, settings, onChange, bookT
   const set = <K extends keyof ReaderSettings>(key: K, value: ReaderSettings[K]) => onChange({ ...settings, [key]: value })
   const [apiKey, setApiKey] = useState('')
   const [model, setModel] = useState<AiModel>('gpt-5-mini')
-  const [rememberKey, setRememberKey] = useState(false)
   const [aiStatus, setAiStatus] = useState('')
   const [testing, setTesting] = useState(false)
   const [usage, setUsage] = useState<AiUsageLedger>(getAiUsageLedger())
@@ -23,9 +22,9 @@ export default function SettingsPanel({ open, onClose, settings, onChange, bookT
   useEffect(() => {
     if (!open) return
     const cfg = getAiConfig(), currentUsage = getAiUsageLedger()
-    setApiKey(cfg.apiKey); setModel(cfg.model); setRememberKey(cfg.rememberKey)
+    setApiKey(cfg.apiKey); setModel(cfg.model)
     setUsage(currentUsage); setBalanceDraft(currentUsage.startingBalance.toFixed(2))
-    setAiStatus(cfg.apiKey ? 'Conexión guardada en este dispositivo.' : '')
+    setAiStatus(cfg.apiKey ? 'IA conectada durante esta sesión.' : '')
   }, [open])
 
   useEffect(() => {
@@ -36,7 +35,7 @@ export default function SettingsPanel({ open, onClose, settings, onChange, bookT
 
   async function connectAi() {
     const previous = getAiConfig()
-    const config = { apiKey: apiKey.trim(), model, rememberKey, responseLength: previous.responseLength }
+    const config = { apiKey: apiKey.trim(), model, rememberKey: false, responseLength: previous.responseLength }
     if (!config.apiKey) { setAiStatus('Escribe una clave API para conectar el Tutor.'); return }
     setTesting(true); setAiStatus('Comprobando conexión…')
     try {
@@ -47,7 +46,7 @@ export default function SettingsPanel({ open, onClose, settings, onChange, bookT
   }
 
   function disconnectAi() {
-    clearAiConfig(); setApiKey(''); setRememberKey(false); setAiStatus('Tutor desconectado. Se usará el modo local.')
+    clearAiConfig(); setApiKey(''); setAiStatus('Tutor desconectado. Se usará el modo local.')
   }
 
   function commitBalance() {
@@ -63,8 +62,8 @@ export default function SettingsPanel({ open, onClose, settings, onChange, bookT
     : settings.theme === 'sepia' ? { bg: '#efe2c8', fg: '#3f3326', muted: '#786957' }
     : { bg: '#fbf7ed', fg: '#17342b', muted: '#6f7c76' }
 
-  return <AnimatePresence>{open && <motion.aside className="settings-sheet" initial={{ y: '105%', opacity: 0 }} animate={{ y: 0, opacity: 1 }} exit={{ y: '105%', opacity: 0 }} transition={{ type: 'spring', stiffness: 370, damping: 34 }}>
-    <div className="tutor-grabber"/><header className="side-header"><div><strong>Apariencia y lectura</strong><span>Los cambios se muestran en tiempo real</span></div><button onClick={onClose}>×</button></header>
+  return <AnimatePresence>{open && <motion.aside className="settings-sheet" role="dialog" aria-modal="true" aria-label="Apariencia y lectura" tabIndex={-1} initial={{ y: '105%', opacity: 0 }} animate={{ y: 0, opacity: 1 }} exit={{ y: '105%', opacity: 0 }} transition={{ type: 'spring', stiffness: 370, damping: 34 }}>
+    <div className="tutor-grabber"/><header className="side-header"><div><strong>Apariencia y lectura</strong><span>Los cambios se muestran en tiempo real</span></div><button onClick={onClose} aria-label="Cerrar ajustes">×</button></header>
     <div className="settings-grid">
       <section className="reading-preview-card">
         <div className="reading-preview-label"><b>Vista previa</b><span>{settings.fontSize}% · interlineado {settings.lineHeight.toFixed(2)} · margen {settings.margins}vw</span></div>
@@ -95,8 +94,8 @@ export default function SettingsPanel({ open, onClose, settings, onChange, bookT
         </div>
         <label><span>Modelo</span><select value={model} onChange={e => setModel(e.target.value as AiModel)}><option value="gpt-5-mini">GPT-5 mini · recomendado</option><option value="gpt-5">GPT-5 · mayor profundidad</option></select></label>
         <label><span>Clave API de OpenAI</span><input className="api-key-input" type="password" value={apiKey} onChange={e => setApiKey(e.target.value)} autoCapitalize="none" autoCorrect="off" autoComplete="off" placeholder="sk-…"/></label>
-        <label className="toggle-row ai-remember"><span><b>Recordar clave</b><small>Prototipo personal. Para la versión final usaremos un servidor seguro.</small></span><input type="checkbox" checked={rememberKey} onChange={e => setRememberKey(e.target.checked)}/></label>
-        {aiStatus && <p className="ai-config-status">{aiStatus}</p>}
+        <p className="security-note"><b>Seguridad:</b> la clave se conserva solo durante la sesión actual. No se guarda en almacenamiento permanente del dispositivo.</p>
+        {aiStatus && <p className="ai-config-status" aria-live="polite">{aiStatus}</p>}
         <div className="ai-config-actions"><button type="button" onClick={() => void connectAi()} disabled={testing}>{testing ? 'Conectando…' : 'Conectar y probar'}</button><button type="button" className="secondary" onClick={disconnectAi}>Desconectar</button></div>
       </section>
     </div>
