@@ -64,7 +64,7 @@ export default function TutorPanel({ open, onClose, context, onConfigureAi }: { 
   const endRef = useRef<HTMLDivElement | null>(null)
 
   useEffect(() => {
-    void db.tutorMessages.where('bookId').equals(context.bookId).sortBy('createdAt').then(rows => setMessages(rows.slice(-40).map(r => ({ role: r.role, content: r.content }))))
+    void db.tutorMessages.where('bookId').equals(context.bookId).sortBy('createdAt').then(rows => setMessages(rows.slice(-40).map(r => ({ role: r.role, content: r.content })))).catch(()=>setMessages([]))
   }, [context.bookId])
 
   useEffect(() => () => recognition.current?.stop(), [])
@@ -84,6 +84,10 @@ export default function TutorPanel({ open, onClose, context, onConfigureAi }: { 
     const config = getAiConfig(); saveAiConfig({ ...config, responseLength: length }); setResponseLength(length)
   }
 
+  async function safeStore(role:'user'|'assistant',content:string,source?:'book'|'reader'|'ai'|'mixed'){
+    try{await db.tutorMessages.add({bookId:context.bookId,role,content,createdAt:Date.now(),source})}catch{}
+  }
+
   async function send(content: string, visibleLabel?: string) {
     const trimmed = content.trim()
     if (!trimmed || busy) return
@@ -92,14 +96,17 @@ export default function TutorPanel({ open, onClose, context, onConfigureAi }: { 
     const uiNext: TutorMessage[] = [...messages, uiUserMessage]
     const modelNext: TutorMessage[] = [...messages, { role: 'user', content: trimmed }]
     setMessages(uiNext); setInput(''); setBusy(true); setDictationStatus('')
-    await db.tutorMessages.add({ bookId: context.bookId, role: 'user', content: displayText, createdAt: Date.now() })
-    void recordReadingEvent(context.bookId, 'tutor_question', 'reader', { chapter: context.currentChapter, href: context.currentHref, progress: context.progress, text: displayText.slice(0, 420) })
 
     try {
-      const [retrievedText, memoryText] = await Promise.all([
+      await safeStore('user',displayText,'reader')
+      void recordReadingEvent(context.bookId, 'tutor_question', 'reader', { chapter: context.currentChapter, href: context.currentHref, progress: context.progress, text: displayText.slice(0, 420) }).catch(()=>undefined)
+
+      const [retrievedResult,memoryResult]=await Promise.allSettled([
         retrieveContext(context.bookId, `${trimmed} ${context.selectedText ?? ''}`, context.progress, context.spoilerPolicy === 'strict'),
         getTutorMemory(context.bookId)
       ])
+      const retrievedText=retrievedResult.status==='fulfilled'?retrievedResult.value:''
+      const memoryText=memoryResult.status==='fulfilled'?memoryResult.value:''
       const enriched = { ...context, retrievedText, memoryText }
       let answer: string
       try { answer = await askTutor(enriched, modelNext.slice(-12)); setAiReady(true) }
@@ -110,10 +117,15 @@ export default function TutorPanel({ open, onClose, context, onConfigureAi }: { 
       }
       const assistantMessage: TutorMessage = { role: 'assistant', content: answer }
       setMessages([...uiNext, assistantMessage]); setRemaining(getAiEstimatedRemaining())
-      await db.tutorMessages.add({ bookId: context.bookId, role: 'assistant', content: answer, createdAt: Date.now(), source: retrievedText ? 'book' : 'mixed' })
-      void recordReadingEvent(context.bookId, 'tutor_answer', 'ai', { chapter: context.currentChapter, href: context.currentHref, progress: context.progress, text: answer.slice(0, 420) })
-      await remember(context.bookId, 'Última pregunta', displayText.slice(0, 260))
-      if (context.selectedText) await remember(context.bookId, 'Último fragmento trabajado', context.selectedText.slice(0, 520))
+      await safeStore('assistant',answer,retrievedText?'book':'mixed')
+      void recordReadingEvent(context.bookId, 'tutor_answer', 'ai', { chapter: context.currentChapter, href: context.currentHref, progress: context.progress, text: answer.slice(0, 420) }).catch(()=>undefined)
+      const memoryOps:Promise<unknown>[]=[remember(context.bookId, 'Última pregunta', displayText.slice(0, 260))]
+      if (context.selectedText) memoryOps.push(remember(context.bookId, 'Último fragmento trabajado', context.selectedText.slice(0, 520)))
+      await Promise.allSettled(memoryOps)
+    } catch(error) {
+      const message='### No se pudo completar la operación\n\nOcurrió un problema local al preparar o guardar la consulta. **Tu lectura no se ha perdido.** Inténtalo nuevamente.'
+      setMessages([...uiNext,{role:'assistant',content:message}])
+      console.warn('Lectoria Tutor:',error)
     } finally { setBusy(false) }
   }
 
@@ -131,32 +143,32 @@ export default function TutorPanel({ open, onClose, context, onConfigureAi }: { 
 
   return <AnimatePresence>{open && <>
     <motion.button className="tutor-backdrop" aria-label="Cerrar tutor" onClick={onClose} initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }} />
-    <motion.aside className="tutor-panel" initial={{ y: '102%', opacity: .4 }} animate={{ y: 0, opacity: 1 }} exit={{ y: '102%', opacity: 0 }} transition={{ type: 'spring', stiffness: 390, damping: 38 }}>
-      <div className="tutor-grabber" />
+    <motion.aside role="dialog" aria-modal="true" aria-label="Tutor Lectoria" tabIndex={-1} className="tutor-panel" initial={{ y: '102%', opacity: .4 }} animate={{ y: 0, opacity: 1 }} exit={{ y: '102%', opacity: 0 }} transition={{ type: 'spring', stiffness: 390, damping: 38 }}>
+      <div className="tutor-grabber" aria-hidden="true" />
       <header className="tutor-header"><div><strong>Tutor Lectoria</strong><span>Texto primero · contexto de lo leído · sin adelantos</span></div><button onClick={onClose} aria-label="Cerrar tutor">×</button></header>
 
-      <div className={`ai-status ${aiReady ? 'connected' : 'local'}`}><span><b>{aiReady ? 'IA generativa conectada' : 'Modo local'}</b>{aiReady ? `Saldo estimado: $${remaining.toFixed(2)}` : 'Conecta la IA para explicaciones interpretativas completas.'}</span>{!aiReady && onConfigureAi && <button onClick={onConfigureAi}>Conectar IA</button>}</div>
+      <div className={`ai-status ${aiReady ? 'connected' : 'local'}`} aria-live="polite"><span><b>{aiReady ? 'IA generativa conectada' : 'Modo local'}</b>{aiReady ? `Saldo estimado: $${remaining.toFixed(2)}` : 'Conecta la IA para explicaciones interpretativas completas.'}</span>{!aiReady && onConfigureAi && <button onClick={onConfigureAi}>Conectar IA</button>}</div>
 
       {context.selectedText && <section className={`selection-preview ${showSelection ? 'expanded' : ''}`}><div className="selection-preview-head"><div className="source-chip book">LIBRO</div><button onClick={() => setShowSelection(v => !v)}>{showSelection ? 'Contraer' : 'Ver fragmento'}</button></div><p>“{showSelection ? context.selectedText.slice(0, 1600) : context.selectedText.slice(0, 240)}{context.selectedText.length > (showSelection ? 1600 : 240) ? '…' : ''}”</p></section>}
 
       <section className="tutor-tools" aria-label="Herramientas del tutor">
         <div className="response-length-control"><span>Extensión</span><button className={responseLength === 'short' ? 'active' : ''} onClick={() => chooseLength('short')}>Corta</button><button className={responseLength === 'medium' ? 'active' : ''} onClick={() => chooseLength('medium')}>Media</button><button className={responseLength === 'long' ? 'active' : ''} onClick={() => chooseLength('long')}>Larga</button></div>
         <div className="quick-prompts primary">{primaryPrompts.map(([label, prompt]) => <button key={label} onClick={() => void send(prompt, label)} disabled={busy}>{label}</button>)}</div>
-        <button className="more-tools" onClick={() => setShowMore(v => !v)}>{showMore ? 'Ocultar herramientas' : 'Más herramientas'}</button>
+        <button className="more-tools" onClick={() => setShowMore(v => !v)} aria-expanded={showMore}>{showMore ? 'Ocultar herramientas' : 'Más herramientas'}</button>
         <AnimatePresence>{showMore && <motion.div className="quick-prompts extras" initial={{height:0,opacity:0}} animate={{height:'auto',opacity:1}} exit={{height:0,opacity:0}}>{extraPrompts.map(([label, prompt]) => <button key={label} onClick={() => void send(prompt, label)} disabled={busy}>{label}</button>)}</motion.div>}</AnimatePresence>
       </section>
 
-      <div className="chat-log">
+      <div className="chat-log" aria-live="polite">
         {messages.length === 0 && <div className="chat-empty"><strong>Trabaja directamente sobre el texto.</strong><span>Selecciona un fragmento y pide una explicación, simplificación o lectura más profunda.</span></div>}
         {messages.map((m, i) => <article key={i} className={`message ${m.role}`}><span className={`source-chip ${m.role === 'assistant' ? 'ai' : 'reader'}`}>{m.role === 'assistant' ? 'IA' : 'TÚ'}</span>{m.role === 'assistant' ? <TutorRichText text={m.content}/> : <p>{m.content}</p>}{m.role === 'assistant' && <button className="speak-mini" onClick={() => void speak(m.content)}>Escuchar</button>}</article>)}
         {busy && <article className="message assistant thinking"><span className="source-chip ai">IA</span><p>Analizando el pasaje, su contexto y tu historial de lectura…</p></article>}
         <div ref={endRef} />
       </div>
 
-      {dictationStatus && <div className={`dictation-status ${listening ? 'recording' : ''}`}>{dictationStatus}</div>}
+      {dictationStatus && <div className={`dictation-status ${listening ? 'recording' : ''}`} aria-live="polite">{dictationStatus}</div>}
       <form className="tutor-input" onSubmit={e => { e.preventDefault(); void send(input) }}>
         <button type="button" className={listening ? 'mic active' : 'mic'} onClick={toggleVoice} aria-label={listening ? 'Terminar dictado' : 'Dictar pregunta'}>{listening ? '■' : '🎙'}</button>
-        <textarea rows={1} value={input} onChange={e => setInput(e.target.value)} placeholder="Escribe o dicta tu pregunta…" />
+        <textarea rows={1} value={input} onChange={e => setInput(e.target.value)} placeholder="Escribe o dicta tu pregunta…" aria-label="Pregunta para el tutor" />
         <button type="submit" aria-label="Enviar" disabled={!input.trim() || busy}>↑</button>
       </form>
     </motion.aside>
