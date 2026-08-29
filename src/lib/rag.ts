@@ -46,12 +46,22 @@ function chunkProgress(spineIndex: number, chunkIndex: number, chunkCount: numbe
   return Math.max(0, Math.min(1, (spineIndex + within) / spineCount))
 }
 
+function sleep(ms:number){return new Promise<void>(resolve=>window.setTimeout(resolve,ms))}
+async function yieldToReader(){
+  // La lectura tiene prioridad absoluta. El índice puede esperar sin afectar el EPUB visible.
+  while(document.querySelector('.reader-shell')) await sleep(700)
+  if('requestIdleCallback' in window){await new Promise<void>(resolve=>(window as any).requestIdleCallback(()=>resolve(),{timeout:350}))}
+  else await sleep(18)
+}
+
 export async function indexBook(record: BookRecord, onProgress?: (value: number) => void) {
+  await yieldToReader()
   await db.books.update(record.id, { indexingStatus: 'indexing' })
   await db.chunks.where('bookId').equals(record.id).delete()
 
   try {
     const buffer = await record.file.arrayBuffer()
+    await yieldToReader()
     const book = ePub(buffer)
     await book.ready
     const navigation = await book.loaded.navigation
@@ -60,6 +70,7 @@ export async function indexBook(record: BookRecord, onProgress?: (value: number)
     const rows: BookChunkRecord[] = []
 
     for (let i = 0; i < items.length; i++) {
+      await yieldToReader()
       const section = items[i]
       try {
         const loaded = await section.load(book.load.bind(book))
@@ -88,12 +99,15 @@ export async function indexBook(record: BookRecord, onProgress?: (value: number)
     }
 
     if (rows.length) {
-      const batch = 700
-      for (let i = 0; i < rows.length; i += batch) await db.chunks.bulkAdd(rows.slice(i, i + batch))
+      const batch = 500
+      for (let i = 0; i < rows.length; i += batch) {
+        await yieldToReader()
+        await db.chunks.bulkAdd(rows.slice(i, i + batch))
+      }
     }
-    let locations: string | undefined
-    try { await book.locations.generate(1500); locations = book.locations.save() } catch {}
-    await db.books.update(record.id, { indexedAt: Date.now(), indexingStatus: 'ready', locations })
+    // Las ubicaciones pertenecen al motor de lectura y se generan allí, después de mostrar la página.
+    // El Tutor no vuelve a recorrer todo el EPUB para producir una segunda copia.
+    await db.books.update(record.id, { indexedAt: Date.now(), indexingStatus: 'ready' })
     try { book.destroy() } catch {}
     return rows.length
   } catch (error) {
