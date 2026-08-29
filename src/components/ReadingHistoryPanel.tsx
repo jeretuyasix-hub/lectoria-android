@@ -36,8 +36,8 @@ export default function ReadingHistoryPanel({ open, onClose, book, context }: { 
 
   useEffect(() => {
     if (!open) return
-    void Promise.all([buildReadingDigest(book), getReadingTimeline(book.id)]).then(([d, t]) => { setDigest(d); setTimeline(t) })
-    void recordReadingEvent(book.id, 'recap', 'system', { chapter: context.currentChapter, progress: context.progress })
+    void Promise.all([buildReadingDigest(book), getReadingTimeline(book.id)]).then(([d, t]) => { setDigest(d); setTimeline(t) }).catch(()=>{setDigest(null);setTimeline([])})
+    void recordReadingEvent(book.id, 'recap', 'system', { chapter: context.currentChapter, progress: context.progress }).catch(()=>undefined)
   }, [open, book.id])
 
   const recap = useMemo(() => digest ? localRecap(digest, book.title) : '', [digest, book.title])
@@ -63,9 +63,9 @@ export default function ReadingHistoryPanel({ open, onClose, book, context }: { 
     } finally { setBusy(false) }
   }
 
-  return <AnimatePresence>{open && <motion.aside className="history-panel side-panel" initial={{ x: '105%' }} animate={{ x: 0 }} exit={{ x: '105%' }} transition={{ type: 'spring', stiffness: 340, damping: 34 }}>
-    <header className="panel-header"><div><div className="eyebrow">MEMORIA LONGITUDINAL</div><h2>Historia de lectura</h2><p>Libro, tus ideas y la IA permanecen separados.</p></div><button onClick={onClose} aria-label="Cerrar">×</button></header>
-    {!digest ? <div className="panel-loading">Reconstruyendo tu recorrido…</div> : <div className="history-content">
+  return <AnimatePresence>{open && <motion.aside role="dialog" aria-modal="true" aria-label="Historia de lectura" tabIndex={-1} className="history-panel side-panel" initial={{ x: '105%' }} animate={{ x: 0 }} exit={{ x: '105%' }} transition={{ type: 'spring', stiffness: 340, damping: 34 }}>
+    <header className="panel-header"><div><div className="eyebrow">MEMORIA LONGITUDINAL</div><h2>Historia de lectura</h2><p>Libro, tus ideas y la IA permanecen separados.</p></div><button onClick={onClose} aria-label="Cerrar historia de lectura">×</button></header>
+    {!digest ? <div className="panel-loading" aria-live="polite">Reconstruyendo tu recorrido…</div> : <div className="history-content">
       <section className="reentry-card">
         <span className="source-chip system">Reentrada</span><h3>Recuérdame dónde estaba</h3><p>{recap}</p>
         <div className="history-actions"><button onClick={() => speak(aiRecap || recap)}>▶ Escuchar</button><button onClick={() => void generateAiRecap()} disabled={busy}>{busy ? 'Analizando…' : 'Profundizar con IA'}</button></div>
