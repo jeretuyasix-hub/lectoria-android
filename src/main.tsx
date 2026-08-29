@@ -2,7 +2,6 @@ import React from 'react'
 import ReactDOM from 'react-dom/client'
 import App from './App'
 import './styles.css'
-import './page-turn.css'
 import './mobile-fixes.css'
 import './mobile-v4.css'
 import './mobile-v6.css'
@@ -46,6 +45,14 @@ function syncThemeToFrames() {
   document.querySelectorAll('iframe').forEach(frame => { try { const doc = (frame as HTMLIFrameElement).contentDocument; if (doc) applyReaderTheme(doc, theme) } catch {} })
 }
 
-const observer = new MutationObserver(() => syncThemeToFrames())
-observer.observe(document.documentElement, { subtree: true, childList: true })
-window.setInterval(syncThemeToFrames, 850)
+let syncFrame=0
+function scheduleThemeSync(){
+  if(syncFrame)return
+  syncFrame=requestAnimationFrame(()=>{syncFrame=0;syncThemeToFrames()})
+}
+const observer = new MutationObserver(mutations => {
+  if(mutations.some(m=>m.type==='childList'||(m.type==='attributes'&&m.attributeName==='data-reader-theme')))scheduleThemeSync()
+})
+observer.observe(document.documentElement, { subtree: true, childList: true, attributes:true, attributeFilter:['data-reader-theme'] })
+document.addEventListener('load',event=>{if((event.target as HTMLElement|null)?.tagName==='IFRAME')scheduleThemeSync()},true)
+scheduleThemeSync()
