@@ -1,61 +1,40 @@
 import { AnimatePresence, motion } from 'framer-motion'
-import { useEffect, useState } from 'react'
+import { useEffect, useMemo, useState } from 'react'
 import { db } from '../lib/db'
 import { clearTutorMemory } from '../lib/memory'
 import type { HighlightRecord, StudyArtifactRecord, TutorMemoryRecord, TutorMessageRecord } from '../types'
 
-export default function NotebookPanel({ open, onClose, bookId, onNavigateHighlight, onDeleteHighlight }: { open: boolean; onClose: () => void; bookId: string; onNavigateHighlight: (cfi: string) => void; onDeleteHighlight?: (cfi:string)=>void }) {
-  const [tab, setTab] = useState<'highlights' | 'conversation' | 'study' | 'memory'>('highlights')
-  const [highlights, setHighlights] = useState<HighlightRecord[]>([])
-  const [messages, setMessages] = useState<TutorMessageRecord[]>([])
-  const [artifacts, setArtifacts] = useState<StudyArtifactRecord[]>([])
-  const [memory, setMemory] = useState<TutorMemoryRecord[]>([])
+function safeName(value:string){return value.normalize('NFD').replace(/[\u0300-\u036f]/g,'').replace(/[^a-z0-9]+/gi,'-').replace(/^-|-$/g,'').toLowerCase()||'libro'}
+function sourceLabel(message:TutorMessageRecord){if(message.role==='user')return'TÚ';if(message.source==='mixed')return'IA + LIBRO';if(message.source==='book')return'LIBRO';if(message.source==='external')return'IA + CONTEXTO';return'IA'}
+function when(time:number){return new Intl.DateTimeFormat('es',{day:'2-digit',month:'short',hour:'2-digit',minute:'2-digit'}).format(new Date(time))}
 
-  async function refresh() {
-    const [h, m, a, mem] = await Promise.all([
-      db.highlights.where('bookId').equals(bookId).reverse().sortBy('createdAt'),
-      db.tutorMessages.where('bookId').equals(bookId).sortBy('createdAt'),
-      db.studyArtifacts.where('bookId').equals(bookId).reverse().sortBy('createdAt'),
-      db.tutorMemory.where('bookId').equals(bookId).reverse().sortBy('updatedAt')
-    ])
-    setHighlights(h); setMessages(m); setArtifacts(a); setMemory(mem)
+export default function NotebookPanel({ open, onClose, bookId, bookTitle='Libro', onNavigateHighlight, onDeleteHighlight }: { open:boolean;onClose:()=>void;bookId:string;bookTitle?:string;onNavigateHighlight:(cfi:string)=>void;onDeleteHighlight?:(cfi:string)=>void }) {
+  const [tab,setTab]=useState<'highlights'|'conversation'|'study'|'memory'>('highlights'),[highlights,setHighlights]=useState<HighlightRecord[]>([]),[messages,setMessages]=useState<TutorMessageRecord[]>([]),[artifacts,setArtifacts]=useState<StudyArtifactRecord[]>([]),[memory,setMemory]=useState<TutorMemoryRecord[]>([]),[query,setQuery]=useState(''),[confirmMemory,setConfirmMemory]=useState(false)
+  async function refresh(){const[h,m,a,mem]=await Promise.all([db.highlights.where('bookId').equals(bookId).reverse().sortBy('createdAt'),db.tutorMessages.where('bookId').equals(bookId).sortBy('createdAt'),db.studyArtifacts.where('bookId').equals(bookId).reverse().sortBy('createdAt'),db.tutorMemory.where('bookId').equals(bookId).reverse().sortBy('updatedAt')]);setHighlights(h);setMessages(m);setArtifacts(a);setMemory(mem)}
+  useEffect(()=>{if(open){void refresh();setConfirmMemory(false)}},[open,bookId])
+  const q=query.trim().toLowerCase()
+  const shownHighlights=useMemo(()=>!q?highlights:highlights.filter(h=>`${h.text} ${h.note||''} ${h.category}`.toLowerCase().includes(q)),[highlights,q])
+  const shownMessages=useMemo(()=>!q?messages:messages.filter(m=>m.content.toLowerCase().includes(q)),[messages,q])
+  const shownArtifacts=useMemo(()=>!q?artifacts:artifacts.filter(a=>`${a.title} ${a.content}`.toLowerCase().includes(q)),[artifacts,q])
+  const shownMemory=useMemo(()=>!q?memory:memory.filter(m=>`${m.key} ${m.value}`.toLowerCase().includes(q)),[memory,q])
+
+  function downloadMarkdown(){
+    const body=[`# Cuaderno de lectura — ${bookTitle}`,'',`Exportado: ${new Date().toLocaleString('es')}`,'','## Subrayados y notas',...highlights.flatMap(h=>[`### ${h.category} · ${when(h.createdAt)}`,`> ${h.text}`,h.note?`\n**Tu nota:** ${h.note}`:'','']), '## Conversación con el Tutor',...messages.flatMap(m=>[`### ${sourceLabel(m)} · ${when(m.createdAt)}`,m.content,m.contextRefs?.length?`\n_Evidencia: ${m.contextRefs.map(r=>`${r.chapterLabel} (${Math.round(r.progress*100)}%)`).join(' · ')}_`:'','']), '## Material de estudio',...artifacts.flatMap(a=>[`### ${a.title} · ${when(a.createdAt)}`,a.content,'']), '## Memoria de trabajo',...memory.flatMap(m=>[`### ${m.key}`,m.value,''])].join('\n')
+    const url=URL.createObjectURL(new Blob([body],{type:'text/markdown;charset=utf-8'})),a=document.createElement('a');a.href=url;a.download=`lectoria-${safeName(bookTitle)}-cuaderno.md`;document.body.appendChild(a);a.click();a.remove();window.setTimeout(()=>URL.revokeObjectURL(url),1500)
   }
+  async function deleteHighlight(h:HighlightRecord){onDeleteHighlight?.(h.cfiRange);if(h.id)await db.highlights.delete(h.id);await refresh()}
+  async function clearMemory(){if(!confirmMemory){setConfirmMemory(true);return}await clearTutorMemory(bookId);setConfirmMemory(false);await refresh()}
 
-  useEffect(() => { if (open) void refresh() }, [open, bookId])
-
-  function downloadMarkdown() {
-    const body = [
-      '# Cuaderno de lectura',
-      '',
-      '## Subrayados y notas',
-      ...highlights.flatMap(h => [`### ${h.category}`, `> ${h.text}`, h.note ? `\n${h.note}` : '', '']),
-      '## Material de estudio',
-      ...artifacts.flatMap(a => [`### ${a.title}`, a.content, ''])
-    ].join('\n')
-    const url = URL.createObjectURL(new Blob([body], { type: 'text/markdown;charset=utf-8' }))
-    const a = document.createElement('a'); a.href = url; a.download = 'cuaderno-lectoria.md'; document.body.appendChild(a); a.click(); a.remove(); window.setTimeout(()=>URL.revokeObjectURL(url),1500)
-  }
-
-  async function deleteHighlight(h:HighlightRecord){
-    onDeleteHighlight?.(h.cfiRange)
-    if(h.id)await db.highlights.delete(h.id)
-    await refresh()
-  }
-
-  async function clearMemory(){
-    if(!window.confirm('¿Borrar la memoria de este libro? Las notas y subrayados no se eliminarán.'))return
-    await clearTutorMemory(bookId);await refresh()
-  }
-
-  return <AnimatePresence>{open && <motion.aside role="dialog" aria-modal="true" aria-label="Cuaderno de lectura" tabIndex={-1} className="side-panel notebook-panel" initial={{ x: '105%', opacity: 0 }} animate={{ x: 0, opacity: 1 }} exit={{ x: '105%', opacity: 0 }} transition={{ type: 'spring', stiffness: 370, damping: 35 }}>
-    <header className="side-header"><div><strong>Cuaderno</strong><span>Tu trabajo intelectual con el libro</span></div><button onClick={onClose} aria-label="Cerrar cuaderno">×</button></header>
-    <div className="segmented four" role="tablist" aria-label="Secciones del cuaderno"><button role="tab" aria-selected={tab === 'highlights'} className={tab === 'highlights' ? 'active' : ''} onClick={() => setTab('highlights')}>Notas</button><button role="tab" aria-selected={tab === 'conversation'} className={tab === 'conversation' ? 'active' : ''} onClick={() => setTab('conversation')}>Tutor</button><button role="tab" aria-selected={tab === 'study'} className={tab === 'study' ? 'active' : ''} onClick={() => setTab('study')}>Estudio</button><button role="tab" aria-selected={tab === 'memory'} className={tab === 'memory' ? 'active' : ''} onClick={() => setTab('memory')}>Memoria</button></div>
-    <div className="panel-scroll">
-      {tab === 'highlights' && <>{highlights.map(h => <article className="notebook-card" key={h.id}><button className="card-main" onClick={() => onNavigateHighlight(h.cfiRange)}><small>{h.category}</small><p>“{h.text}”</p>{h.note && <strong>{h.note}</strong>}</button><button className="danger-mini" aria-label={`Eliminar subrayado ${h.text.slice(0,50)}`} onClick={() => void deleteHighlight(h)}>Eliminar</button></article>)}{!highlights.length && <p className="muted">Todavía no hay subrayados.</p>}</>}
-      {tab === 'conversation' && <>{messages.map(m => <article className={`notebook-card chat-${m.role}`} key={m.id}><small>{m.role === 'user' ? 'Tú' : 'Tutor'}</small><p>{m.content}</p></article>)}{!messages.length && <p className="muted">La conversación con el tutor aparecerá aquí.</p>}</>}
-      {tab === 'study' && <>{artifacts.map(a => <article className="notebook-card" key={a.id}><small>{a.type}</small><strong>{a.title}</strong><p className="prewrap">{a.content}</p></article>)}{!artifacts.length && <p className="muted">Genera un cierre de capítulo, mapa o fichas desde el panel de estudio.</p>}</>}
-      {tab === 'memory' && <>{memory.map(m => <article className="notebook-card" key={m.id}><strong>{m.key}</strong><p>{m.value}</p></article>)}{!memory.length && <p className="muted">El tutor aún no ha guardado memoria de este libro.</p>}<button className="secondary-action" onClick={() => void clearMemory()}>Borrar memoria del libro</button></>}
+  return <AnimatePresence>{open&&<><motion.button className="panel-backdrop" aria-label="Cerrar cuaderno" onClick={onClose} initial={{opacity:0}} animate={{opacity:1}} exit={{opacity:0}}/><motion.aside role="dialog" aria-modal="true" aria-label="Cuaderno de lectura" tabIndex={-1} className="side-panel notebook-panel premium-side-panel" initial={{x:'105%',opacity:0}} animate={{x:0,opacity:1}} exit={{x:'105%',opacity:0}} transition={{type:'spring',stiffness:390,damping:38,mass:.82}}>
+    <header className="side-header"><div><strong>Cuaderno</strong><span>Tu archivo intelectual con «{bookTitle}»</span></div><button onClick={onClose} aria-label="Cerrar cuaderno">×</button></header>
+    <div className="notebook-search"><input value={query} onChange={e=>setQuery(e.target.value)} placeholder="Buscar en notas, Tutor, estudio y memoria…" aria-label="Buscar en el cuaderno"/><span>{highlights.length+messages.length+artifacts.length+memory.length} elementos</span></div>
+    <div className="segmented four premium-segmented" role="tablist" aria-label="Secciones del cuaderno"><button role="tab" aria-selected={tab==='highlights'} className={tab==='highlights'?'active':''} onClick={()=>setTab('highlights')}>Notas <b>{highlights.length}</b></button><button role="tab" aria-selected={tab==='conversation'} className={tab==='conversation'?'active':''} onClick={()=>setTab('conversation')}>Tutor <b>{messages.length}</b></button><button role="tab" aria-selected={tab==='study'} className={tab==='study'?'active':''} onClick={()=>setTab('study')}>Estudio <b>{artifacts.length}</b></button><button role="tab" aria-selected={tab==='memory'} className={tab==='memory'?'active':''} onClick={()=>setTab('memory')}>Memoria <b>{memory.length}</b></button></div>
+    <div className="panel-scroll premium-notebook-scroll">
+      {tab==='highlights'&&<>{shownHighlights.map((h,i)=><motion.article className="notebook-card premium-notebook-card" key={h.id??i} initial={{opacity:0,y:8}} animate={{opacity:1,y:0}}><button className="card-main" onClick={()=>onNavigateHighlight(h.cfiRange)}><div className="notebook-meta"><small>{h.category}</small><time>{when(h.createdAt)}</time></div><p>“{h.text}”</p>{h.note&&<strong>{h.note}</strong>}</button><button className="danger-mini" aria-label={`Eliminar subrayado ${h.text.slice(0,50)}`} onClick={()=>void deleteHighlight(h)}>Eliminar</button></motion.article>)}{!shownHighlights.length&&<p className="muted">{q?'No hay notas que coincidan con la búsqueda.':'Todavía no hay subrayados.'}</p>}</>}
+      {tab==='conversation'&&<>{shownMessages.map((m,i)=><article className={`notebook-card chat-${m.role}`} key={m.id??i}><div className="notebook-meta"><span className={`source-chip ${m.source||m.role}`}>{sourceLabel(m)}</span><time>{when(m.createdAt)}</time></div><p className="prewrap">{m.content}</p>{m.contextRefs?.length?<small>{m.contextRefs.length} referencia{m.contextRefs.length===1?'':'s'} del libro consultada{m.contextRefs.length===1?'':'s'}</small>:null}</article>)}{!shownMessages.length&&<p className="muted">{q?'No hay conversaciones que coincidan.':'La conversación con el Tutor aparecerá aquí.'}</p>}</>}
+      {tab==='study'&&<>{shownArtifacts.map((a,i)=><article className="notebook-card" key={a.id??i}><div className="notebook-meta"><small>{a.type}</small><time>{when(a.createdAt)}</time></div><strong>{a.title}</strong><p className="prewrap">{a.content}</p></article>)}{!shownArtifacts.length&&<p className="muted">{q?'No hay material que coincida.':'Genera un cierre, mapa o fichas desde Estudio.'}</p>}</>}
+      {tab==='memory'&&<>{shownMemory.map((m,i)=><article className="notebook-card memory-card" key={m.id??i}><div className="notebook-meta"><strong>{m.key}</strong><time>{when(m.updatedAt)}</time></div><p>{m.value}</p></article>)}{!shownMemory.length&&<p className="muted">{q?'No hay memoria que coincida.':'El Tutor aún no ha guardado memoria de este libro.'}</p>}<div className={`memory-danger-zone ${confirmMemory?'confirming':''}`}><span>{confirmMemory?'Esto elimina solo la memoria del Tutor; tus notas permanecen.':'Puedes reiniciar la memoria inferida sin borrar tu trabajo.'}</span><button className="secondary-action" onClick={()=>void clearMemory()}>{confirmMemory?'Confirmar borrado':'Borrar memoria del libro'}</button>{confirmMemory&&<button className="text-action" onClick={()=>setConfirmMemory(false)}>Cancelar</button>}</div></>}
     </div>
-    <footer className="panel-footer"><button onClick={downloadMarkdown}>Exportar cuaderno .md</button></footer>
-  </motion.aside>}</AnimatePresence>
+    <footer className="panel-footer"><button onClick={downloadMarkdown}>Exportar cuaderno completo .md</button></footer>
+  </motion.aside></>}</AnimatePresence>
 }
