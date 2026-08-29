@@ -1,6 +1,6 @@
 import type { ReaderContext, TutorMessage } from '../types'
 
-export type AiModel = 'gpt-5-mini' | 'gpt-5'
+export type AiModel = 'gpt-5.6-luna' | 'gpt-5.6-terra' | 'gpt-5.6-sol'
 export type AiResponseLength = 'short' | 'medium' | 'long'
 export interface AiConfig {
   apiKey: string
@@ -19,42 +19,66 @@ export interface AiUsageLedger {
   updatedAt: number
 }
 
-const AI_CONFIG_KEY = 'lectoria-ai-config-v2'
+const AI_CONFIG_KEY = 'lectoria-ai-config-v3'
+const LEGACY_CONFIG_KEYS = ['lectoria-ai-config-v2', 'lectoria-ai-config-v1']
 const AI_SESSION_KEY = 'lectoria-ai-session-key'
 const AI_USAGE_KEY = 'lectoria-ai-usage-v1'
+const DEFAULT_MODEL: AiModel = 'gpt-5.6-terra'
 
-const PRICES: Record<AiModel, { input: number; cached: number; output: number }> = {
-  'gpt-5-mini': { input: 0.25, cached: 0.025, output: 2 },
-  'gpt-5': { input: 1.25, cached: 0.125, output: 10 }
+// Precios públicos por millón de tokens. Para una estimación conservadora,
+// los tokens de entrada cacheados se contabilizan al precio normal de entrada.
+const PRICES: Record<AiModel, { input: number; output: number }> = {
+  'gpt-5.6-luna': { input: .20, output: 1.20 },
+  'gpt-5.6-terra': { input: 2, output: 12 },
+  'gpt-5.6-sol': { input: 4, output: 20 }
+}
+
+export function getAiModelLabel(model: AiModel) {
+  if (model === 'gpt-5.6-luna') return 'GPT-5.6 Luna'
+  if (model === 'gpt-5.6-sol') return 'GPT-5.6 Sol'
+  return 'GPT-5.6 Terra'
+}
+
+function normalizeModel(value: unknown): AiModel {
+  if (value === 'gpt-5.6-luna' || value === 'gpt-5.6-terra' || value === 'gpt-5.6-sol') return value
+  if (value === 'gpt-5-mini') return 'gpt-5.6-luna'
+  if (value === 'gpt-5') return 'gpt-5.6-terra'
+  return DEFAULT_MODEL
+}
+
+function normalizeLength(value: unknown): AiResponseLength {
+  return value === 'short' || value === 'long' ? value : 'medium'
+}
+
+function migrateLegacyConfig() {
+  if (localStorage.getItem(AI_CONFIG_KEY)) return
+  for (const key of LEGACY_CONFIG_KEYS) {
+    try {
+      const raw = localStorage.getItem(key)
+      if (!raw) continue
+      const old = JSON.parse(raw) as Partial<AiConfig>
+      const legacyKey = String(old.apiKey || '').trim()
+      if (legacyKey && !sessionStorage.getItem(AI_SESSION_KEY)) sessionStorage.setItem(AI_SESSION_KEY, legacyKey)
+      localStorage.setItem(AI_CONFIG_KEY, JSON.stringify({ apiKey: '', model: normalizeModel(old.model), rememberKey: false, responseLength: normalizeLength(old.responseLength) }))
+      break
+    } catch {}
+  }
+  for (const key of LEGACY_CONFIG_KEYS) localStorage.removeItem(key)
 }
 
 export function getAiConfig(): AiConfig {
   try {
+    migrateLegacyConfig()
     const saved = JSON.parse(localStorage.getItem(AI_CONFIG_KEY) || '{}') as Partial<AiConfig>
-    let sessionKey = sessionStorage.getItem(AI_SESSION_KEY) || ''
-    const legacyKey = String(saved.apiKey || '').trim()
-    if (!sessionKey && legacyKey) {
-      sessionKey = legacyKey
-      sessionStorage.setItem(AI_SESSION_KEY, legacyKey)
-    }
-    if (legacyKey || saved.rememberKey) {
-      localStorage.setItem(AI_CONFIG_KEY, JSON.stringify({ model: saved.model === 'gpt-5' ? 'gpt-5' : 'gpt-5-mini', rememberKey: false, responseLength: saved.responseLength === 'short' || saved.responseLength === 'long' ? saved.responseLength : 'medium', apiKey: '' }))
-    }
-    const responseLength: AiResponseLength = saved.responseLength === 'short' || saved.responseLength === 'long' ? saved.responseLength : 'medium'
-    return {
-      apiKey: sessionKey,
-      model: saved.model === 'gpt-5' ? 'gpt-5' : 'gpt-5-mini',
-      rememberKey: false,
-      responseLength
-    }
+    return { apiKey: sessionStorage.getItem(AI_SESSION_KEY) || '', model: normalizeModel(saved.model), rememberKey: false, responseLength: normalizeLength(saved.responseLength) }
   } catch {
-    return { apiKey: sessionStorage.getItem(AI_SESSION_KEY) || '', model: 'gpt-5-mini', rememberKey: false, responseLength: 'medium' }
+    return { apiKey: sessionStorage.getItem(AI_SESSION_KEY) || '', model: DEFAULT_MODEL, rememberKey: false, responseLength: 'medium' }
   }
 }
 
 export function saveAiConfig(config: AiConfig) {
   const cleanKey = config.apiKey.trim()
-  localStorage.setItem(AI_CONFIG_KEY, JSON.stringify({ model: config.model, rememberKey: false, responseLength: config.responseLength, apiKey: '' }))
+  localStorage.setItem(AI_CONFIG_KEY, JSON.stringify({ model: normalizeModel(config.model), rememberKey: false, responseLength: normalizeLength(config.responseLength), apiKey: '' }))
   if (cleanKey) sessionStorage.setItem(AI_SESSION_KEY, cleanKey)
   else sessionStorage.removeItem(AI_SESSION_KEY)
 }
@@ -109,10 +133,9 @@ function recordResponseUsage(data: any, model: AiModel) {
   const usage = data?.usage
   if (!usage) return
   const inputTokens = Math.max(0, Number(usage.input_tokens || 0))
-  const cachedTokens = Math.min(inputTokens, Math.max(0, Number(usage.input_tokens_details?.cached_tokens || 0)))
   const outputTokens = Math.max(0, Number(usage.output_tokens || 0))
   const price = PRICES[model]
-  const cost = ((inputTokens - cachedTokens) * price.input + cachedTokens * price.cached + outputTokens * price.output) / 1_000_000
+  const cost = (inputTokens * price.input + outputTokens * price.output) / 1_000_000
   const ledger = getAiUsageLedger()
   ledger.spentText += cost; ledger.requests += 1; ledger.inputTokens += inputTokens; ledger.outputTokens += outputTokens; ledger.updatedAt = Date.now(); saveLedger(ledger)
 }
@@ -125,37 +148,36 @@ function clip(text: string | undefined, max: number) {
 function lengthInstruction(length: AiResponseLength) {
   if (length === 'short') return 'EXTENSIÓN: CORTA. Ve al núcleo del problema. Aproximadamente 2–4 párrafos breves o su equivalente; omite desarrollos secundarios.'
   if (length === 'long') return 'EXTENSIÓN: LARGA. Desarrolla con profundidad, relaciones conceptuales, matices y ejemplos cuando aporten. Puede usar varias secciones, sin rellenar ni repetir.'
-  return 'EXTENSIÓN: MEDIA. Explica suficientemente para comprender bien el pasaje, con 3–5 secciones o párrafos sustantivos, evitando tanto la telegráfica brevedad como la expansión innecesaria.'
+  return 'EXTENSIÓN: MEDIA. Explica suficientemente para comprender bien el pasaje, con 3–5 secciones o párrafos sustantivos, evitando tanto la brevedad telegráfica como la expansión innecesaria.'
 }
 
 function buildTutorInstructions(context: ReaderContext, responseLength: AiResponseLength) {
-  return `Eres Tutor Lectoria, un tutor de lectura profunda en español. Tu trabajo no es resumir mecánicamente ni sustituir la lectura, sino ayudar a comprender con precisión el pasaje que el lector está trabajando.
+  return `Eres Tutor Lectoria, un tutor de lectura profunda en español. Tu función es aumentar la comprensión del lector sin reemplazar su lectura.
 
 REGLAS EPISTÉMICAS
-1. TEXTO PRIMERO. El fragmento seleccionado es la evidencia principal. Analiza sus relaciones concretas, no una lista de palabras frecuentes.
-2. Distingue entre: (a) lo que el autor afirma o puede sostenerse directamente por el texto; (b) tu inferencia interpretativa; (c) contexto externo. No atribuyas al autor una interpretación del lector o de la IA.
-3. No uses contenido posterior al progreso actual cuando la política sea estricta.
-4. Si el usuario pide EXPLICAR: abre con "### En otras palabras", reconstruye la tesis y luego muestra cómo se relacionan sus conceptos; termina con "### Por qué importa aquí" cuando sea útil.
-5. Si pide SIMPLIFICAR: conserva todas las relaciones lógicas importantes y reescribe en lenguaje directo sin empobrecer la tesis.
-6. Si pide PROFUNDIZAR: identifica presupuestos, oposición conceptual, consecuencia y problema teórico; señala qué parte es interpretación.
-7. Si pide DEFINIR: define solo los conceptos decisivos y explica qué significan EN ESTE PASAJE.
-8. Para EJEMPLOS, construye uno concreto y explica qué relación representa y dónde deja de servir.
-9. Responde de forma fluida, pedagógica y específica. Evita listas de palabras sin relación y burocracia metadiscursiva.
-10. Si la selección parece incompleta, dilo y trabaja con lo disponible sin inventar el resto.
-11. FORMATO DIDÁCTICO: usa Markdown con ### para secciones, **negrita** para conceptos o conclusiones decisivas y *cursiva* para matices o títulos. Usa listas solo si aclaran. Evita paredes de texto.
-12. No repitas innecesariamente el fragmento completo.
-13. ${lengthInstruction(responseLength)}
+1. TEXTO PRIMERO. El fragmento seleccionado es la evidencia principal.
+2. Separa con rigor: AUTOR/LIBRO, LECTOR y TU INFERENCIA. Nunca atribuyas al autor una interpretación del lector o de la IA.
+3. Cuando la política sea estricta, no uses material posterior a la posición actual, aunque aparezca en la misma sección EPUB.
+4. Si EXPLICAS, reconstruye la tesis, las relaciones entre conceptos y por qué importan en este pasaje.
+5. Si SIMPLIFICAS, conserva las relaciones lógicas importantes.
+6. Si PROFUNDIZAS, identifica presupuestos, oposiciones, consecuencias y problemas teóricos; marca lo interpretativo.
+7. Si DEFINES, explica el significado de los conceptos EN ESTE PASAJE.
+8. Para EJEMPLOS, explica qué relación representa el ejemplo y dónde deja de servir.
+9. Si el fragmento es incompleto, dilo y trabaja solo con lo disponible.
+10. Usa Markdown legible: ### para secciones, **negrita** para conceptos decisivos y listas solo cuando aclaren.
+11. No repitas el fragmento completo sin necesidad.
+12. ${lengthInstruction(responseLength)}
 
 LIBRO: ${context.title} — ${context.author}
 TIPO: ${context.bookType || 'no especificado'}
 CAPÍTULO ACTUAL: ${context.currentChapter || 'sin etiqueta'}
 PROGRESO: ${Math.round(context.progress * 100)}%
-POLÍTICA DE ADELANTOS: ${context.spoilerPolicy === 'strict' ? 'estricta: solo lo leído' : 'permitidos si son necesarios'}`
+POLÍTICA DE ADELANTOS: ${context.spoilerPolicy === 'strict' ? 'estricta: exclusivamente material alcanzado' : 'permitidos cuando sean necesarios y se indiquen'}`
 }
 
 function buildTutorInput(context: ReaderContext, messages: TutorMessage[]) {
   const recent = messages.slice(-10).map(m => `${m.role === 'user' ? 'LECTOR' : 'TUTOR'}: ${clip(m.content, 1200)}`).join('\n\n')
-  return `FRAGMENTO SELECCIONADO (fuente principal):\n${clip(context.selectedText, 5000) || '[No hay selección explícita]'}\n\nCONTEXTO CERCANO DE LA PÁGINA/CAPÍTULO:\n${clip(context.nearbyText, 4500) || '[No disponible]'}\n\nPASAJES ANTERIORES RECUPERADOS:\n${clip(context.retrievedText, 5000) || '[No se recuperaron pasajes adicionales]'}\n\nMEMORIA DE TRABAJO DEL LECTOR:\n${clip(context.memoryText, 2200) || '[Sin memoria relevante]'}\n\nCONVERSACIÓN RECIENTE:\n${recent || '[Primera intervención]'}\n\nResponde a la última petición del lector centrándote en el fragmento.`
+  return `FRAGMENTO SELECCIONADO (fuente principal):\n${clip(context.selectedText, 5000) || '[No hay selección explícita]'}\n\nCONTEXTO CERCANO DE LA PÁGINA/CAPÍTULO:\n${clip(context.nearbyText, 4500) || '[No disponible]'}\n\nPASAJES ANTERIORES RECUPERADOS:\n${clip(context.retrievedText, 5200) || '[No se recuperaron pasajes adicionales]'}\n\nMEMORIA DE TRABAJO DEL LECTOR:\n${clip(context.memoryText, 2600) || '[Sin memoria relevante]'}\n\nCONVERSACIÓN RECIENTE:\n${recent || '[Primera intervención]'}\n\nResponde a la última petición centrándote en el texto y manteniendo la separación de procedencias.`
 }
 
 function extractResponseText(data: any) {
@@ -170,29 +192,38 @@ function friendlyApiError(status: number, detail: string) {
   if (status === 429 && (lower.includes('quota') || lower.includes('billing'))) return 'La conexión funciona, pero la cuenta de API no tiene saldo disponible o alcanzó su cuota.'
   if (status === 401) return 'La clave API no es válida o fue revocada.'
   if (status === 403) return 'La cuenta o el proyecto no tienen permiso para usar este modelo.'
-  if (status === 404) return 'El modelo o servicio solicitado no está disponible para esta cuenta.'
+  if (status === 404) return 'El modelo solicitado no está disponible para esta cuenta.'
   if (status === 429) return 'OpenAI está limitando temporalmente las solicitudes. Intenta de nuevo en unos segundos.'
   if (status >= 500) return 'El servicio de IA está temporalmente indisponible. Intenta de nuevo en unos minutos.'
   return detail || `OpenAI respondió ${status}.`
 }
 
-async function fetchWithTimeout(url: string, init: RequestInit, timeoutMs: number) {
+async function fetchWithTimeout(url: string, init: RequestInit, timeoutMs: number, externalSignal?: AbortSignal) {
   const controller = new AbortController()
+  const abortFromOutside = () => controller.abort()
+  if (externalSignal?.aborted) controller.abort()
+  else externalSignal?.addEventListener('abort', abortFromOutside, { once: true })
   const timer = window.setTimeout(() => controller.abort(), timeoutMs)
   try { return await fetch(url, { ...init, signal: controller.signal }) }
   catch (error) {
-    if (error instanceof DOMException && error.name === 'AbortError') throw new Error('La consulta tardó demasiado y fue cancelada. Comprueba tu conexión e inténtalo de nuevo.')
+    if (error instanceof DOMException && error.name === 'AbortError') {
+      if (externalSignal?.aborted) throw new DOMException('Consulta cancelada', 'AbortError')
+      throw new Error('La consulta tardó demasiado y fue cancelada. Comprueba tu conexión e inténtalo de nuevo.')
+    }
     throw new Error('No se pudo conectar con el servicio de IA. Comprueba tu conexión a Internet.')
-  } finally { window.clearTimeout(timer) }
+  } finally {
+    window.clearTimeout(timer)
+    externalSignal?.removeEventListener('abort', abortFromOutside)
+  }
 }
 
-async function askOpenAI(context: ReaderContext, messages: TutorMessage[], config: AiConfig) {
-  const maxTokens = config.responseLength === 'short' ? 700 : config.responseLength === 'long' ? 2600 : 1400
+async function askOpenAI(context: ReaderContext, messages: TutorMessage[], config: AiConfig, signal?: AbortSignal) {
+  const maxTokens = config.responseLength === 'short' ? 700 : config.responseLength === 'long' ? 2800 : 1500
   const response = await fetchWithTimeout('https://api.openai.com/v1/responses', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${config.apiKey}` },
     body: JSON.stringify({ model: config.model, instructions: buildTutorInstructions(context, config.responseLength), input: buildTutorInput(context, messages), max_output_tokens: maxTokens, store: false })
-  }, 45000)
+  }, 50000, signal)
   if (!response.ok) {
     let detail = ''; try { detail = String((await response.json())?.error?.message || '') } catch {}
     throw new Error(friendlyApiError(response.status, detail))
@@ -217,10 +248,10 @@ export async function testAiConnection(config: AiConfig) {
   return extractResponseText(data) || 'Conexión correcta.'
 }
 
-export async function askTutor(context: ReaderContext, messages: TutorMessage[]) {
+export async function askTutor(context: ReaderContext, messages: TutorMessage[], options?: { signal?: AbortSignal }) {
   const config = getAiConfig()
   if (!config.apiKey) throw new Error('AI_NOT_CONFIGURED')
-  return askOpenAI(context, messages, config)
+  return askOpenAI(context, messages, config, options?.signal)
 }
 
 function sentences(text: string) {
