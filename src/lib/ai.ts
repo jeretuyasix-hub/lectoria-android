@@ -31,30 +31,32 @@ const PRICES: Record<AiModel, { input: number; cached: number; output: number }>
 export function getAiConfig(): AiConfig {
   try {
     const saved = JSON.parse(localStorage.getItem(AI_CONFIG_KEY) || '{}') as Partial<AiConfig>
-    const sessionKey = sessionStorage.getItem(AI_SESSION_KEY) || ''
+    let sessionKey = sessionStorage.getItem(AI_SESSION_KEY) || ''
+    const legacyKey = String(saved.apiKey || '').trim()
+    if (!sessionKey && legacyKey) {
+      sessionKey = legacyKey
+      sessionStorage.setItem(AI_SESSION_KEY, legacyKey)
+    }
+    if (legacyKey || saved.rememberKey) {
+      localStorage.setItem(AI_CONFIG_KEY, JSON.stringify({ model: saved.model === 'gpt-5' ? 'gpt-5' : 'gpt-5-mini', rememberKey: false, responseLength: saved.responseLength === 'short' || saved.responseLength === 'long' ? saved.responseLength : 'medium', apiKey: '' }))
+    }
     const responseLength: AiResponseLength = saved.responseLength === 'short' || saved.responseLength === 'long' ? saved.responseLength : 'medium'
     return {
-      apiKey: saved.rememberKey ? String(saved.apiKey || '') : sessionKey,
+      apiKey: sessionKey,
       model: saved.model === 'gpt-5' ? 'gpt-5' : 'gpt-5-mini',
-      rememberKey: Boolean(saved.rememberKey),
+      rememberKey: false,
       responseLength
     }
   } catch {
-    return { apiKey: '', model: 'gpt-5-mini', rememberKey: false, responseLength: 'medium' }
+    return { apiKey: sessionStorage.getItem(AI_SESSION_KEY) || '', model: 'gpt-5-mini', rememberKey: false, responseLength: 'medium' }
   }
 }
 
 export function saveAiConfig(config: AiConfig) {
   const cleanKey = config.apiKey.trim()
-  const common = { model: config.model, rememberKey: config.rememberKey, responseLength: config.responseLength }
-  if (config.rememberKey) {
-    localStorage.setItem(AI_CONFIG_KEY, JSON.stringify({ ...common, apiKey: cleanKey }))
-    sessionStorage.removeItem(AI_SESSION_KEY)
-  } else {
-    localStorage.setItem(AI_CONFIG_KEY, JSON.stringify({ ...common, apiKey: '' }))
-    if (cleanKey) sessionStorage.setItem(AI_SESSION_KEY, cleanKey)
-    else sessionStorage.removeItem(AI_SESSION_KEY)
-  }
+  localStorage.setItem(AI_CONFIG_KEY, JSON.stringify({ model: config.model, rememberKey: false, responseLength: config.responseLength, apiKey: '' }))
+  if (cleanKey) sessionStorage.setItem(AI_SESSION_KEY, cleanKey)
+  else sessionStorage.removeItem(AI_SESSION_KEY)
 }
 
 export function clearAiConfig() {
@@ -167,17 +169,30 @@ function friendlyApiError(status: number, detail: string) {
   const lower = detail.toLowerCase()
   if (status === 429 && (lower.includes('quota') || lower.includes('billing'))) return 'La conexión funciona, pero la cuenta de API no tiene saldo disponible o alcanzó su cuota.'
   if (status === 401) return 'La clave API no es válida o fue revocada.'
+  if (status === 403) return 'La cuenta o el proyecto no tienen permiso para usar este modelo.'
+  if (status === 404) return 'El modelo o servicio solicitado no está disponible para esta cuenta.'
   if (status === 429) return 'OpenAI está limitando temporalmente las solicitudes. Intenta de nuevo en unos segundos.'
+  if (status >= 500) return 'El servicio de IA está temporalmente indisponible. Intenta de nuevo en unos minutos.'
   return detail || `OpenAI respondió ${status}.`
+}
+
+async function fetchWithTimeout(url: string, init: RequestInit, timeoutMs: number) {
+  const controller = new AbortController()
+  const timer = window.setTimeout(() => controller.abort(), timeoutMs)
+  try { return await fetch(url, { ...init, signal: controller.signal }) }
+  catch (error) {
+    if (error instanceof DOMException && error.name === 'AbortError') throw new Error('La consulta tardó demasiado y fue cancelada. Comprueba tu conexión e inténtalo de nuevo.')
+    throw new Error('No se pudo conectar con el servicio de IA. Comprueba tu conexión a Internet.')
+  } finally { window.clearTimeout(timer) }
 }
 
 async function askOpenAI(context: ReaderContext, messages: TutorMessage[], config: AiConfig) {
   const maxTokens = config.responseLength === 'short' ? 700 : config.responseLength === 'long' ? 2600 : 1400
-  const response = await fetch('https://api.openai.com/v1/responses', {
+  const response = await fetchWithTimeout('https://api.openai.com/v1/responses', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${config.apiKey}` },
     body: JSON.stringify({ model: config.model, instructions: buildTutorInstructions(context, config.responseLength), input: buildTutorInput(context, messages), max_output_tokens: maxTokens, store: false })
-  })
+  }, 45000)
   if (!response.ok) {
     let detail = ''; try { detail = String((await response.json())?.error?.message || '') } catch {}
     throw new Error(friendlyApiError(response.status, detail))
@@ -190,10 +205,10 @@ async function askOpenAI(context: ReaderContext, messages: TutorMessage[], confi
 
 export async function testAiConnection(config: AiConfig) {
   if (!config.apiKey.trim()) throw new Error('Escribe una clave API.')
-  const response = await fetch('https://api.openai.com/v1/responses', {
+  const response = await fetchWithTimeout('https://api.openai.com/v1/responses', {
     method: 'POST', headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${config.apiKey.trim()}` },
     body: JSON.stringify({ model: config.model, input: 'Responde únicamente: Conexión correcta.', max_output_tokens: 30, store: false })
-  })
+  }, 20000)
   if (!response.ok) {
     let detail = ''; try { detail = String((await response.json())?.error?.message || '') } catch {}
     throw new Error(friendlyApiError(response.status, detail))
@@ -220,5 +235,5 @@ export function localTutorFallback(context: ReaderContext, userPrompt: string) {
   if (lower.includes('defin')) return `### Conceptos\n\nEl pasaje gira alrededor de esta afirmación: **“${clip(central, 360)}”**.`
   if (lower.includes('profund')) return `### Punto de partida\n\n“${clip(central, 360)}”\n\nUna lectura más profunda debe reconstruir **qué oposición organiza esta afirmación**, qué presupone y qué consecuencia intenta establecer.`
   if (lower.includes('explica')) return `### En otras palabras\n\nEl pasaje parte de esta tesis: **“${clip(central, 420)}”**.`
-  return `He recuperado el pasaje seleccionado, pero esta función necesita la IA generativa para responder de forma interpretativa. Abre **Aa → Tutor IA** y conecta tu proveedor.`
+  return `He recuperado el pasaje seleccionado, pero esta función necesita la IA generativa para responder de forma interpretativa. Abre **Apariencia → Tutor IA** y conecta tu proveedor.`
 }
