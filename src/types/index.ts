@@ -1,5 +1,7 @@
 export type ThemeMode = 'paper' | 'sepia' | 'dark' | 'oled'
 export type PageMode = 'slide' | 'curl' | 'scroll'
+export type FontFamilyMode = 'publisher' | 'literary' | 'modern' | 'accessible'
+export type TextAlignMode = 'publisher' | 'left' | 'justify'
 export type HighlightCategory = 'idea' | 'concept' | 'question' | 'quote' | 'argument' | 'evidence' | 'contradiction'
 export type StudyArtifactType = 'page_preview' | 'chapter_review' | 'concept_map' | 'flashcards'
 export type BookType = 'novel' | 'essay' | 'philosophy' | 'social_science' | 'science' | 'academic' | 'manual' | 'study'
@@ -12,6 +14,7 @@ export interface BookRecord {
   author: string
   cover?: string
   file: Blob & { name?: string }
+  fingerprint?: string
   progress: number
   cfi?: string
   addedAt: number
@@ -50,6 +53,14 @@ export interface BookChunkRecord {
   normalized: string
 }
 
+export interface TutorContextRef {
+  href: string
+  chapterLabel: string
+  progress: number
+  excerpt: string
+  score?: number
+}
+
 export interface TutorMessage {
   id?: number
   bookId?: string
@@ -57,6 +68,7 @@ export interface TutorMessage {
   content: string
   createdAt?: number
   source?: 'book' | 'reader' | 'ai' | 'external' | 'mixed'
+  contextRefs?: TutorContextRef[]
 }
 
 export interface TutorMessageRecord extends TutorMessage {
@@ -164,4 +176,7 @@ export interface ReaderSettings {
   spoilerPolicy: 'strict' | 'allowed'
   prepAudio: boolean
   ttsRate: number
+  fontFamily: FontFamilyMode
+  textAlign: TextAlignMode
+  paragraphSpacing: boolean
 }
