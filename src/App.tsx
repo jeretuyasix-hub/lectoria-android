@@ -12,6 +12,9 @@ export default function App() {
     let listener: { remove: () => Promise<void> } | null = null
 
     void NativeApp.addListener('backButton', () => {
+      const request = new Event('lectoria-back-request', { cancelable: true })
+      window.dispatchEvent(request)
+      if (request.defaultPrevented) return
       if (activeBook) {
         setActiveBook(null)
         return
