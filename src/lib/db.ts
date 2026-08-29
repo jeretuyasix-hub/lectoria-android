@@ -47,6 +47,17 @@ class ReaderDB extends Dexie {
       readingSessions: '++id, bookId, startedAt, endedAt, [bookId+startedAt]',
       preferences: 'key, updatedAt'
     })
+    this.version(4).stores({
+      books: 'id, title, author, lastOpenedAt, addedAt, indexingStatus, fingerprint',
+      highlights: '++id, bookId, createdAt, category',
+      chunks: '++id, bookId, href, progress, [bookId+spineIndex], [bookId+progress]',
+      tutorMessages: '++id, bookId, createdAt, [bookId+createdAt]',
+      tutorMemory: '++id, bookId, key, [bookId+key], updatedAt',
+      studyArtifacts: '++id, bookId, type, createdAt, [bookId+type]',
+      readingEvents: '++id, bookId, createdAt, type, source, [bookId+createdAt]',
+      readingSessions: '++id, bookId, startedAt, endedAt, [bookId+startedAt]',
+      preferences: 'key, updatedAt'
+    })
   }
 }
 
