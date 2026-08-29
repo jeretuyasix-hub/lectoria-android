@@ -106,6 +106,19 @@ function nativeRecognition(
   return { stop: () => { void stopNative() } }
 }
 
+async function transcribeWithTimeout(form:FormData,apiKey:string){
+  const controller=new AbortController(),timer=window.setTimeout(()=>controller.abort(),30000)
+  try{
+    const response=await fetch('https://api.openai.com/v1/audio/transcriptions',{method:'POST',headers:{Authorization:`Bearer ${apiKey}`},body:form,signal:controller.signal})
+    if(!response.ok)throw new Error(`La transcripción no está disponible en este momento (${response.status}).`)
+    return await response.json()
+  }catch(error){
+    if(error instanceof DOMException&&error.name==='AbortError')throw new Error('La transcripción tardó demasiado. Comprueba tu conexión e inténtalo otra vez.')
+    if(error instanceof Error)throw error
+    throw new Error('No se pudo conectar con el servicio de transcripción.')
+  }finally{window.clearTimeout(timer)}
+}
+
 export function startSpeechRecognition(
   onText: (text: string) => void,
   onEnd?: () => void,
@@ -148,13 +161,7 @@ export function startSpeechRecognition(
           form.append('model', 'gpt-4o-mini-transcribe')
           form.append('language', 'es')
           form.append('file', blob, `dictado.${extension}`)
-          const response = await fetch('https://api.openai.com/v1/audio/transcriptions', {
-            method: 'POST',
-            headers: { Authorization: `Bearer ${config.apiKey}` },
-            body: form
-          })
-          if (!response.ok) throw new Error(`Transcripción no disponible (${response.status}).`)
-          const data = await response.json()
+          const data = await transcribeWithTimeout(form,config.apiKey)
           const text = String(data?.text || '').trim()
           if (text) onText(text)
           else onError?.('No pude entender el dictado.')
