@@ -1,3 +1,4 @@
+import { Capacitor } from '@capacitor/core'
 import { LocalNotifications } from '@capacitor/local-notifications'
 import { db } from './db'
 import type { HabitSettings, ReadingSessionRecord } from '../types'
@@ -42,7 +43,7 @@ export async function startReadingSession(bookId: string): Promise<number | unde
 export async function finishReadingSession(id: number | undefined, startedAt: number) {
   if (!id) return
   const endedAt = Date.now()
-  const minutes = Math.max(1, Math.round((endedAt - startedAt) / 60000))
+  const minutes = Math.max(0, Math.floor((endedAt - startedAt) / 60000))
   await db.readingSessions.update(id, { endedAt, minutes })
 }
 
@@ -68,9 +69,7 @@ export async function getHabitStats(settings?: HabitSettings) {
     const key = localDateKey(cursor.getTime())
     const minutes = totals.get(key) || 0
     if (minutes >= cfg.dailyGoalMinutes) streak += 1
-    else if (i === 0) {
-      // During the current day, yesterday's streak is still alive until the day ends.
-    } else break
+    else if (i !== 0) break
     cursor.setDate(cursor.getDate() - 1)
   }
   return {
@@ -82,21 +81,29 @@ export async function getHabitStats(settings?: HabitSettings) {
 }
 
 export async function requestReminderPermission() {
+  if (Capacitor.isNativePlatform()) {
+    try { return (await LocalNotifications.requestPermissions()).display }
+    catch { return 'unsupported' as const }
+  }
   if (!('Notification' in window)) return 'unsupported' as const
   if (Notification.permission === 'granted') return 'granted' as const
   if (Notification.permission === 'denied') return 'denied' as const
   return Notification.requestPermission()
 }
 
-function inQuietHours(now: Date, settings: HabitSettings) {
-  const minute = now.getHours() * 60 + now.getMinutes()
-  const toMin = (value: string) => {
-    const [h, m] = value.split(':').map(Number)
-    return (Number.isFinite(h) ? h : 0) * 60 + (Number.isFinite(m) ? m : 0)
-  }
-  const start = toMin(settings.quietStart)
-  const end = toMin(settings.quietEnd)
+function toMinutes(value: string) {
+  const [h, m] = value.split(':').map(Number)
+  return (Number.isFinite(h) ? h : 0) * 60 + (Number.isFinite(m) ? m : 0)
+}
+
+function minuteInQuietHours(minute: number, settings: HabitSettings) {
+  const start = toMinutes(settings.quietStart)
+  const end = toMinutes(settings.quietEnd)
   return start <= end ? minute >= start && minute < end : minute >= start || minute < end
+}
+
+function inQuietHours(now: Date, settings: HabitSettings) {
+  return minuteInQuietHours(now.getHours() * 60 + now.getMinutes(), settings)
 }
 
 function dueAt(now: Date, hhmm: string) {
@@ -114,8 +121,8 @@ async function showBrowserReminder(settings: HabitSettings) {
     try {
       if ('serviceWorker' in navigator) {
         const registration = await navigator.serviceWorker.ready
-        await registration.showNotification('Lector IA · momento de leer', { body, tag: 'lector-ia-daily-reminder' })
-      } else new Notification('Lector IA · momento de leer', { body, tag: 'lector-ia-daily-reminder' })
+        await registration.showNotification('Lectoria · momento de leer', { body, tag: 'lectoria-daily-reminder' })
+      } else new Notification('Lectoria · momento de leer', { body, tag: 'lectoria-daily-reminder' })
     } catch { /* noop */ }
   }
   window.dispatchEvent(new CustomEvent('lector-ia-reminder', { detail: { body } }))
@@ -127,8 +134,7 @@ export async function getOpeningNudge(settings: HabitSettings) {
   if (stats.todayMinutes >= settings.dailyGoalMinutes) return ''
   const now = new Date()
   const current = now.getHours() * 60 + now.getMinutes()
-  const [rh, rm] = settings.reminderTime.split(':').map(Number)
-  const reminder = rh * 60 + rm
+  const reminder = toMinutes(settings.reminderTime)
   if (current < reminder) return ''
   const remaining = Math.max(1, settings.dailyGoalMinutes - stats.todayMinutes)
   if (settings.motivationalNudges && stats.streak > 0) return `Tu continuidad sigue viva: te faltan ${remaining} min para completar la meta de hoy.`
@@ -150,6 +156,7 @@ export function startReminderEngine(settings: HabitSettings) {
 }
 
 export async function syncNativeReminderSchedule(settings: HabitSettings) {
+  if (!Capacitor.isNativePlatform()) return false
   try {
     const permission = await LocalNotifications.requestPermissions()
     if (permission?.display !== 'granted') return false
@@ -165,9 +172,10 @@ export async function syncNativeReminderSchedule(settings: HabitSettings) {
         extra: { route: 'library' }
       }
     }
-    const notifications = [build(7101, settings.reminderTime)]
-    if (settings.secondReminderEnabled) notifications.push(build(7102, settings.secondReminderTime))
-    await LocalNotifications.schedule({ notifications })
+    const notifications: ReturnType<typeof build>[] = []
+    if (!minuteInQuietHours(toMinutes(settings.reminderTime), settings)) notifications.push(build(7101, settings.reminderTime))
+    if (settings.secondReminderEnabled && !minuteInQuietHours(toMinutes(settings.secondReminderTime), settings)) notifications.push(build(7102, settings.secondReminderTime))
+    if (notifications.length) await LocalNotifications.schedule({ notifications })
     return true
   } catch {
     return false
