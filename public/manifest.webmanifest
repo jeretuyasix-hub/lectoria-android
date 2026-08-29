@@ -1,11 +1,11 @@
 {
-  "name": "Lector IA",
-  "short_name": "Lector IA",
-  "description": "Lector EPUB local-first con tutor contextual, voz, notas y estudio.",
+  "name": "Lectoria",
+  "short_name": "Lectoria",
+  "description": "Lector EPUB local-first con Tutor contextual, voz, notas, memoria longitudinal y estudio.",
   "start_url": ".",
   "scope": ".",
   "display": "standalone",
   "background_color": "#f4efe6",
-  "theme_color": "#f4efe6",
+  "theme_color": "#0B5A46",
   "lang": "es"
 }
