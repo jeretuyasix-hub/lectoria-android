@@ -11,7 +11,7 @@ export interface BookRecord {
   title: string
   author: string
   cover?: string
-  file: Blob
+  file: Blob & { name?: string }
   progress: number
   cfi?: string
   addedAt: number
@@ -56,7 +56,7 @@ export interface TutorMessage {
   role: 'user' | 'assistant'
   content: string
   createdAt?: number
-  source?: 'book' | 'external' | 'mixed'
+  source?: 'book' | 'reader' | 'ai' | 'external' | 'mixed'
 }
 
 export interface TutorMessageRecord extends TutorMessage {
