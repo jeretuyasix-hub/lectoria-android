@@ -2,84 +2,38 @@ import { AnimatePresence, motion } from 'framer-motion'
 import { useEffect, useMemo, useState } from 'react'
 import { askTutor, localTutorFallback } from '../lib/ai'
 import { buildReadingDigest, getReadingTimeline, recordReadingEvent } from '../lib/history'
-import { retrieveContext } from '../lib/rag'
+import { retrieveContextDetailed } from '../lib/rag'
 import { speak } from '../lib/tts'
 import type { BookRecord, ReaderContext, ReadingEventRecord } from '../types'
 
-type Digest = Awaited<ReturnType<typeof buildReadingDigest>>
+type Digest=Awaited<ReturnType<typeof buildReadingDigest>>
+type NavTarget={cfi?:string;href?:string;progress?:number}
+const sourceLabels:Record<string,string>={book:'Libro',reader:'Tú',ai:'IA',system:'Lectura'}
+const eventLabels:Record<string,string>={session_start:'Empezaste a leer',session_end:'Terminaste una sesión',progress:'Avanzaste',chapter:'Entraste en una sección',highlight:'Subrayaste',note:'Escribiste una nota',tutor_question:'Preguntaste al Tutor',tutor_answer:'El Tutor respondió',recap:'Revisaste tu recorrido'}
+function when(time:number){return new Intl.DateTimeFormat('es',{day:'2-digit',month:'short',hour:'2-digit',minute:'2-digit'}).format(new Date(time))}
+function localRecap(digest:Digest,title:string){const parts=[`Retomas «${title}» después de ${digest.elapsed}. Estás aproximadamente en el ${digest.progress}% del libro.`];if(digest.lastChapter)parts.push(`La última sección registrada es “${digest.lastChapter}”.`);if(digest.bookEvidence[0])parts.push(`Entre tus subrayados recientes aparece: “${digest.bookEvidence[0].text}”.`);if(digest.readerNotes[0])parts.push(`Tu nota más reciente decía: “${digest.readerNotes[0].text}”.`);if(digest.questions[0])parts.push(`Una de tus últimas preguntas fue: “${digest.questions[0].text}”.`);if(digest.pending[0])parts.push(`Quedó pendiente esta cuestión: “${digest.pending[0]}”.`);return parts.join(' ')}
 
-const sourceLabels: Record<string, string> = { book: 'Libro', reader: 'Tú', ai: 'IA', system: 'Lectura' }
-const eventLabels: Record<string, string> = {
-  session_start: 'Empezaste a leer', session_end: 'Terminaste una sesión', progress: 'Avanzaste', chapter: 'Entraste en un capítulo',
-  highlight: 'Subrayaste', note: 'Escribiste una nota', tutor_question: 'Preguntaste al tutor', tutor_answer: 'El tutor respondió', recap: 'Revisaste tu recorrido'
-}
+export default function ReadingHistoryPanel({open,onClose,book,context,onNavigate}:{open:boolean;onClose:()=>void;book:BookRecord;context:ReaderContext;onNavigate?:(target:NavTarget)=>void}){
+  const[digest,setDigest]=useState<Digest|null>(null),[timeline,setTimeline]=useState<ReadingEventRecord[]>([]),[aiRecap,setAiRecap]=useState(''),[busy,setBusy]=useState(false),[mode,setMode]=useState<'brief'|'standard'|'deep'>('standard')
+  useEffect(()=>{if(!open)return;void Promise.all([buildReadingDigest(book),getReadingTimeline(book.id)]).then(([d,t])=>{setDigest(d);setTimeline(t)}).catch(()=>{setDigest(null);setTimeline([])})},[open,book.id,book.progress])
+  const recap=useMemo(()=>digest?localRecap(digest,book.title):'',[digest,book.title])
+  const shownRecap=useMemo(()=>{if(mode!=='brief')return recap;const parts=recap.match(/[^.!?]+[.!?]+|[^.!?]+$/g)||[recap];return parts.slice(0,3).join(' ')},[mode,recap])
 
-function when(time: number) {
-  return new Intl.DateTimeFormat('es', { day: '2-digit', month: 'short', hour: '2-digit', minute: '2-digit' }).format(new Date(time))
-}
+  async function generateAiRecap(){if(!digest||busy)return;setBusy(true);const evidence=[`Progreso: ${digest.progress}%`,`Sección: ${digest.lastChapter||context.currentChapter||'sin identificar'}`,`Pasajes subrayados: ${digest.bookEvidence.map(x=>x.text).join(' | ')||'ninguno'}`,`Notas del lector: ${digest.readerNotes.map(x=>x.text).join(' | ')||'ninguna'}`,`Preguntas previas: ${digest.questions.map(x=>x.text).join(' | ')||'ninguna'}`,`Pendientes: ${digest.pending.join(' | ')||'ninguno'}`].join('\n');const prompt=`Haz una reentrada intelectual rigurosa y sin spoilers para retomar la lectura. Distingue claramente LIBRO, LECTOR e INFERENCIA DE IA. Resume solo el tramo alcanzado de la sección, no el libro completo. ${mode==='deep'?'Puedes desarrollar hasta 8 puntos y cerrar con dos relaciones conceptuales que conviene vigilar.':'Incluye máximo 6 puntos y una frase final sobre qué conviene observar al continuar.'}\n\nEvidencia:\n${evidence}`;try{const retrieval=await retrieveContextDetailed(context.bookId,`ideas centrales de ${digest.lastChapter||context.currentChapter||'la sección actual'} hasta la posición actual`,context.progress,context.spoilerPolicy==='strict',5);const answer=await askTutor({...context,memoryText:evidence,retrievedText:retrieval.text},[{role:'user',content:prompt,source:'reader'}]);setAiRecap(answer);await recordReadingEvent(book.id,'recap','ai',{chapter:context.currentChapter,href:context.currentHref,progress:context.progress,text:answer.slice(0,360)})}catch{setAiRecap(localTutorFallback({...context,memoryText:evidence},prompt))}finally{setBusy(false)}}
+  async function listen(){await recordReadingEvent(book.id,'recap','system',{chapter:context.currentChapter,href:context.currentHref,progress:context.progress,text:'Reentrada escuchada'}).catch(()=>undefined);void speak(aiRecap||shownRecap)}
+  function go(target:NavTarget){onNavigate?.(target);onClose()}
+  function eventTarget(event:ReadingEventRecord):NavTarget|null{return event.cfi?{cfi:event.cfi}:event.href?{href:event.href,progress:event.progress}:typeof event.progress==='number'?{progress:event.progress}:null}
 
-function localRecap(digest: Digest, title: string) {
-  const parts = [`Has retomado «${title}» después de ${digest.elapsed}. Vas aproximadamente por el ${digest.progress}% del libro.`]
-  if (digest.lastChapter) parts.push(`La última zona registrada corresponde a “${digest.lastChapter}”.`)
-  if (digest.bookEvidence[0]) parts.push(`Entre los pasajes que más marcaste aparece: “${digest.bookEvidence[0].text}”.`)
-  if (digest.readerNotes[0]) parts.push(`Tu nota más reciente decía: “${digest.readerNotes[0].text}”.`)
-  if (digest.questions[0]) parts.push(`Una de tus últimas preguntas fue: “${digest.questions[0].text}”.`)
-  if (digest.pending[0]) parts.push(`Quedó pendiente esta duda: “${digest.pending[0]}”.`)
-  return parts.join(' ')
-}
-
-export default function ReadingHistoryPanel({ open, onClose, book, context }: { open: boolean; onClose: () => void; book: BookRecord; context: ReaderContext }) {
-  const [digest, setDigest] = useState<Digest | null>(null)
-  const [timeline, setTimeline] = useState<ReadingEventRecord[]>([])
-  const [aiRecap, setAiRecap] = useState('')
-  const [busy, setBusy] = useState(false)
-
-  useEffect(() => {
-    if (!open) return
-    void Promise.all([buildReadingDigest(book), getReadingTimeline(book.id)]).then(([d, t]) => { setDigest(d); setTimeline(t) }).catch(()=>{setDigest(null);setTimeline([])})
-    void recordReadingEvent(book.id, 'recap', 'system', { chapter: context.currentChapter, progress: context.progress }).catch(()=>undefined)
-  }, [open, book.id])
-
-  const recap = useMemo(() => digest ? localRecap(digest, book.title) : '', [digest, book.title])
-
-  async function generateAiRecap() {
-    if (!digest || busy) return
-    setBusy(true)
-    const evidence = [
-      `Progreso: ${digest.progress}%`,
-      `Capítulo: ${digest.lastChapter || context.currentChapter || 'sin identificar'}`,
-      `Pasajes subrayados: ${digest.bookEvidence.map(x => x.text).join(' | ') || 'ninguno'}`,
-      `Notas del lector: ${digest.readerNotes.map(x => x.text).join(' | ') || 'ninguna'}`,
-      `Preguntas previas: ${digest.questions.map(x => x.text).join(' | ') || 'ninguna'}`,
-      `Pendientes: ${digest.pending.join(' | ') || 'ninguno'}`
-    ].join('\n')
-    const prompt = `Haz una reentrada intelectual breve, rigurosa y sin spoilers para retomar la lectura. Distingue claramente: (1) lo que aparece en el libro, (2) lo que anotó o preguntó el lector y (3) cualquier inferencia tuya. Resume el tramo ya leído del capítulo, no el libro completo. Incluye máximo 6 puntos y una frase final sobre qué conviene observar al continuar. Evidencia del lector:\n${evidence}`
-    try {
-      const retrievedText = await retrieveContext(context.bookId, `ideas centrales del capítulo ${digest.lastChapter || context.currentChapter || ''} hasta la posición actual; retomar lectura`, context.progress, context.spoilerPolicy === 'strict')
-      const answer = await askTutor({ ...context, memoryText: evidence, retrievedText }, [{ role: 'user', content: prompt }])
-      setAiRecap(answer)
-    } catch {
-      setAiRecap(localTutorFallback({ ...context, memoryText: evidence }, prompt))
-    } finally { setBusy(false) }
-  }
-
-  return <AnimatePresence>{open && <motion.aside role="dialog" aria-modal="true" aria-label="Historia de lectura" tabIndex={-1} className="history-panel side-panel" initial={{ x: '105%' }} animate={{ x: 0 }} exit={{ x: '105%' }} transition={{ type: 'spring', stiffness: 340, damping: 34 }}>
+  return <AnimatePresence>{open&&<><motion.button className="panel-backdrop" aria-label="Cerrar historia de lectura" onClick={onClose} initial={{opacity:0}} animate={{opacity:1}} exit={{opacity:0}}/><motion.aside role="dialog" aria-modal="true" aria-label="Historia de lectura" tabIndex={-1} className="history-panel side-panel premium-side-panel" initial={{x:'105%',opacity:0}} animate={{x:0,opacity:1}} exit={{x:'105%',opacity:0}} transition={{type:'spring',stiffness:380,damping:37,mass:.84}}>
     <header className="panel-header"><div><div className="eyebrow">MEMORIA LONGITUDINAL</div><h2>Historia de lectura</h2><p>Libro, tus ideas y la IA permanecen separados.</p></div><button onClick={onClose} aria-label="Cerrar historia de lectura">×</button></header>
-    {!digest ? <div className="panel-loading" aria-live="polite">Reconstruyendo tu recorrido…</div> : <div className="history-content">
-      <section className="reentry-card">
-        <span className="source-chip system">Reentrada</span><h3>Recuérdame dónde estaba</h3><p>{recap}</p>
-        <div className="history-actions"><button onClick={() => speak(aiRecap || recap)}>▶ Escuchar</button><button onClick={() => void generateAiRecap()} disabled={busy}>{busy ? 'Analizando…' : 'Profundizar con IA'}</button></div>
-        {aiRecap && <div className="ai-recap"><span className="source-chip ai">IA</span><p>{aiRecap}</p></div>}
-      </section>
-
-      <section><h3>Lo que te ha llamado la atención</h3><div className="interest-row">{digest.interests.length ? digest.interests.map(i => <span key={i.name}>{i.name} · {i.count}</span>) : <span>Aún no hay suficientes marcas.</span>}</div></section>
-
-      <section className="source-section"><h3>Según el libro</h3>{digest.bookEvidence.length ? digest.bookEvidence.map((item, i) => <article key={i}><span className="source-chip book">Libro</span><p>“{item.text}”</p><small>{item.category}</small></article>) : <p className="muted">Aún no has subrayado pasajes.</p>}</section>
-      <section className="source-section"><h3>Tus notas e interpretaciones</h3>{digest.readerNotes.length ? digest.readerNotes.map((item, i) => <article key={i}><span className="source-chip reader">Tú</span><p>{item.text}</p><small>Sobre: “{item.quote}”</small></article>) : <p className="muted">Aún no has escrito notas.</p>}</section>
-      <section className="source-section"><h3>Preguntas que has venido trabajando</h3>{digest.questions.length ? digest.questions.map((item, i) => <article key={i}><span className="source-chip reader">Tú</span><p>{item.text}</p></article>) : <p className="muted">Todavía no hay preguntas registradas.</p>}</section>
-      {digest.pending.length > 0 && <section className="pending-section"><h3>Asuntos pendientes</h3>{digest.pending.map((p, i) => <p key={i}>○ {p}</p>)}</section>}
-
-      <section><h3>Línea temporal</h3><div className="timeline">{timeline.length ? timeline.map((event, i) => <article key={event.id ?? i} className="timeline-item"><div className="timeline-dot"/><div><div className="timeline-meta"><span className={`source-chip ${event.source}`}>{sourceLabels[event.source] || event.source}</span><time>{when(event.createdAt)}</time></div><strong>{eventLabels[event.type] || event.type}</strong>{event.chapter && <span>{event.chapter}</span>}{event.text && <p>{event.text}</p>}{typeof event.progress === 'number' && <small>{Math.round(event.progress * 100)}% del libro</small>}</div></article>) : <p className="muted">La línea temporal comenzará a crecer con tus próximas sesiones.</p>}</div></section>
+    {!digest?<div className="panel-loading" aria-live="polite"><i/><i/><i/><span>Reconstruyendo tu recorrido…</span></div>:<div className="history-content">
+      <section className="reentry-card premium-reentry"><span className="source-chip system">REENTRADA</span><h3>Recuérdame dónde estaba</h3><div className="recap-mode" role="tablist" aria-label="Extensión de reentrada"><button className={mode==='brief'?'active':''} onClick={()=>setMode('brief')}>20 s</button><button className={mode==='standard'?'active':''} onClick={()=>setMode('standard')}>1 min</button><button className={mode==='deep'?'active':''} onClick={()=>setMode('deep')}>Detallada</button></div><p>{shownRecap}</p><div className="history-actions"><button onClick={()=>void listen()}>▶ Escuchar</button><button onClick={()=>void generateAiRecap()} disabled={busy}>{busy?'Analizando…':mode==='deep'?'Reconstruir a fondo con IA':'Profundizar con IA'}</button></div>{aiRecap&&<motion.div className="ai-recap" initial={{opacity:0,y:8}} animate={{opacity:1,y:0}}><span className="source-chip mixed">IA + LIBRO</span><p className="prewrap">{aiRecap}</p></motion.div>}</section>
+      <section className="interest-section"><h3>Temas que reaparecen en tus marcas</h3><div className="interest-row">{digest.interests.length?digest.interests.map(i=><span key={i.name}>{i.name} · {i.count}</span>):<span>Aún no hay suficiente texto marcado para inferir temas.</span>}</div></section>
+      <section className="source-section"><h3>Según el libro</h3>{digest.bookEvidence.length?digest.bookEvidence.map((item,i)=><article key={i}><button className="source-card-main" onClick={()=>item.cfi&&go({cfi:item.cfi})}><span className="source-chip book">LIBRO</span><p>“{item.text}”</p><small>{item.category}</small></button></article>):<p className="muted">Aún no has subrayado pasajes.</p>}</section>
+      <section className="source-section"><h3>Tus notas e interpretaciones</h3>{digest.readerNotes.length?digest.readerNotes.map((item,i)=><article key={i}><button className="source-card-main" onClick={()=>item.cfi&&go({cfi:item.cfi})}><span className="source-chip reader">TÚ</span><p>{item.text}</p><small>Sobre: “{item.quote}”</small></button></article>):<p className="muted">Aún no has escrito notas.</p>}</section>
+      <section className="source-section"><h3>Preguntas que has venido trabajando</h3>{digest.questions.length?digest.questions.map((item,i)=><article key={i}><span className="source-chip reader">TÚ</span><p>{item.text}</p></article>):<p className="muted">Todavía no hay preguntas registradas.</p>}</section>
+      {digest.pending.length>0&&<section className="pending-section"><h3>Asuntos pendientes</h3>{digest.pending.map((p,i)=><p key={i}>○ {p}</p>)}</section>}
+      <section><h3>Línea temporal</h3><div className="timeline">{timeline.length?timeline.map((event,i)=>{const target=eventTarget(event);return <article key={event.id??i} className="timeline-item"><div className="timeline-dot"/><div><div className="timeline-meta"><span className={`source-chip ${event.source}`}>{sourceLabels[event.source]||event.source}</span><time>{when(event.createdAt)}</time></div><strong>{eventLabels[event.type]||event.type}</strong>{event.chapter&&<span>{event.chapter}</span>}{event.text&&<p>{event.text}</p>}<div className="timeline-footer">{typeof event.progress==='number'&&<small>{Math.round(event.progress*100)}% del libro</small>}{target&&onNavigate&&<button onClick={()=>go(target)}>Ir a este punto</button>}</div></div></article>}):<p className="muted">La línea temporal comenzará a crecer con tus próximas sesiones.</p>}</div></section>
     </div>}
-  </motion.aside>}</AnimatePresence>
+  </motion.aside></>}</AnimatePresence>
 }
