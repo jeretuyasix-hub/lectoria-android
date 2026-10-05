@@ -179,4 +179,5 @@ export interface ReaderSettings {
   fontFamily: FontFamilyMode
   textAlign: TextAlignMode
   paragraphSpacing: boolean
+  pageTurnV16?: boolean
 }

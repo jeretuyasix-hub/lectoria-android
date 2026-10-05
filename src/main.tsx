@@ -10,6 +10,7 @@ import './reader-minimal.css'
 import './android-input-fix.css'
 import './qa-v14.css'
 import './premium-v15.css'
+import './page-turn.css'
 
 ReactDOM.createRoot(document.getElementById('root')!).render(<React.StrictMode><App /></React.StrictMode>)
 
