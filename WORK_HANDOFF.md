@@ -41,6 +41,13 @@ The diagnosis was narrowed to EPUB navigation/rendering, not import failure.
 6. Tutor indexing yields completely while `.reader-shell` exists.
 7. Tutor indexing no longer generates a second redundant location map.
 
+### v16 — pase de página y corrección de página en blanco
+
+1. Root cause of the blank reader found: `premium-v15.css` set `.premium-reader .reader-stage{position:relative}`, so the EPUB host measured 0px high. `src/page-turn.css` restores `position:absolute`.
+2. New interactive page turn (`pageMode: 'curl'`, now default): the page follows the finger with a CSS 3D `rotateY` around the spine plus shading. No html2canvas, no WebGL, no screenshots. `slide` mode now follows the finger 1:1.
+3. Taps, edge taps and keyboard use the same `turnPage()`; reduced-motion falls back to instant navigation.
+4. Verified in headless Chromium with `public/demo.epub` (next/prev/end-of-book bounce). Not yet device-tested.
+
 ## Product direction
 
 Lectoria should feel like a serious premium reading application, not a chatbot wrapped around an EPUB renderer.

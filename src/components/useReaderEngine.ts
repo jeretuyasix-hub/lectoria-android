@@ -5,20 +5,25 @@ import { finishReadingSession, getHabitSettings, startReadingSession } from '../
 import { recordReadingEvent, shouldOfferReentry } from '../lib/history'
 import type { BookRecord, HighlightCategory, ReaderContext, ReaderSettings, TocItem } from '../types'
 
-const DEFAULT: ReaderSettings={fontSize:100,theme:'paper',pageMode:'slide',lineHeight:1.72,margins:7,spoilerPolicy:'strict',prepAudio:false,ttsRate:1,fontFamily:'publisher',textAlign:'publisher',paragraphSpacing:false}
+const DEFAULT: ReaderSettings={fontSize:100,theme:'paper',pageMode:'curl',lineHeight:1.72,margins:7,spoilerPolicy:'strict',prepAudio:false,ttsRate:1,fontFamily:'publisher',textAlign:'publisher',paragraphSpacing:false}
 const FONT_STACKS:Record<ReaderSettings['fontFamily'],string>={publisher:'',literary:'Iowan Old Style, Palatino Linotype, Georgia, serif',modern:'Inter, system-ui, sans-serif',accessible:'Atkinson Hyperlegible, Verdana, system-ui, sans-serif'}
-function loadSettings():ReaderSettings{try{const saved=JSON.parse(localStorage.getItem('lectoria-settings')||'{}');const merged={...DEFAULT,...saved} as ReaderSettings;if(merged.pageMode==='curl')merged.pageMode='slide';return merged}catch{return DEFAULT}}
+function loadSettings():ReaderSettings{try{const saved=JSON.parse(localStorage.getItem('lectoria-settings')||'{}');const merged={...DEFAULT,...saved} as ReaderSettings;if(!saved.pageTurnV16){merged.pageTurnV16=true;if(merged.pageMode==='slide')merged.pageMode='curl'}return merged}catch{return DEFAULT}}
 function tocLabel(items:TocItem[],href:string):string{const clean=href.split('#')[0];for(const i of items){if(clean.endsWith(i.href.split('#')[0])||i.href.split('#')[0].endsWith(clean))return i.label;const c=i.subitems?.length?tocLabel(i.subitems,href):'';if(c)return c}return''}
 function cleanHref(value:string){let result=(value||'').split('#')[0].split('?')[0];try{result=decodeURIComponent(result)}catch{}return result.replace(/^\.\//,'')}
 function wait(ms:number){return new Promise<void>(resolve=>window.setTimeout(resolve,ms))}
 type Swipe={active:boolean;dragging:boolean;blocked:boolean;edge:boolean;startX:number;startY:number;lastX:number;lastY:number;lastAt:number;startAt:number;velocityX:number;width:number;height:number;direction:'next'|'prev';doc:Document|null}
 type DisplayTarget=string|{href?:string;progress?:number}
+type TurnMode='curl'|'slide'|'none'
+
+function reducedMotion(){try{return matchMedia('(prefers-reduced-motion: reduce)').matches}catch{return false}}
+// Interpolación con ease-out; se resuelve aunque requestAnimationFrame se detenga (app en segundo plano).
+function tween(ms:number,step:(t:number)=>void){return new Promise<void>(resolve=>{const t0=performance.now();let done=false;const end=()=>{if(done)return;done=true;step(1);resolve()};const tick=(now:number)=>{if(done)return;const t=Math.min(1,(now-t0)/ms);if(t>=1){end();return}step(1-Math.pow(1-t,3));requestAnimationFrame(tick)};requestAnimationFrame(tick);window.setTimeout(end,ms+160)})}
 
 function softHaptic(ms=7){try{navigator.vibrate?.(ms)}catch{}}
 
 export function useReaderEngine(bookRecord:BookRecord,onCenterTap:()=>void,onOfferHistory:()=>void){
   const host=useRef<HTMLDivElement>(null),stage=useRef<HTMLDivElement>(null),book=useRef<Book|null>(null),rendition=useRef<Rendition|null>(null)
-  const docs=useRef(new WeakSet<Document>()),busy=useRef(false),settingsRef=useRef<ReaderSettings>(loadSettings())
+  const docs=useRef(new WeakSet<Document>()),busy=useRef(false),turning=useRef(false),settingsRef=useRef<ReaderSettings>(loadSettings())
   const swipe=useRef<Swipe>({active:false,dragging:false,blocked:false,edge:false,startX:0,startY:0,lastX:0,lastY:0,lastAt:0,startAt:0,velocityX:0,width:1,height:1,direction:'next',doc:null})
   const locationStack=useRef<string[]>([]),currentHrefRef=useRef(''),currentSpineIndex=useRef(-1),displayedRef=useRef({page:1,total:1})
   const [settings,setSettings]=useState(loadSettings),[progress,setProgress]=useState(bookRecord.progress||0),[location,setLocation]=useState(''),[chapter,setChapter]=useState(''),[href,setHref]=useState('')
@@ -46,45 +51,95 @@ export function useReaderEngine(bookRecord:BookRecord,onCenterTap:()=>void,onOff
     for(let i=index+step;i>=0&&i<items.length;i+=step){const item=items[i];if(item?.linear==='no')continue;const target=String(item?.href||item?.url||'');if(!target)continue;try{await r.display(target);return true}catch{}}
     return false
   }
-  async function navigatePage(dir:'next'|'prev'){
-    const r=rendition.current;if(!r||busy.current)return;busy.current=true
-    const before=snapshotPosition()
+  async function navigatePage(dir:'next'|'prev'):Promise<boolean>{
+    const r=rendition.current;if(!r||busy.current)return false;busy.current=true
+    const before=snapshotPosition();let moved=false
     try{
       const action=dir==='next'?r.next():r.prev()
       await Promise.race([Promise.resolve(action).then(()=>undefined),wait(260)])
       await wait(24)
-      if(!movedFrom(before))await forceSpineStep(dir)
+      moved=movedFrom(before)||await forceSpineStep(dir)
       softHaptic(5)
-    }catch(e){console.warn('Lectoria: no se pudo cambiar de página',e);try{await forceSpineStep(dir)}catch{}}
+    }catch(e){console.warn('Lectoria: no se pudo cambiar de página',e);try{moved=await forceSpineStep(dir)}catch{}}
     finally{window.setTimeout(()=>busy.current=false,55)}
+    return moved
   }
-  function point(t:Touch,doc:Document){if(doc===document){const rect=host.current?.getBoundingClientRect();return rect?{x:t.clientX-rect.left,y:t.clientY-rect.top}:{x:t.clientX,y:t.clientY}}return{x:t.clientX,y:t.clientY}}
-  function size(doc:Document){if(doc===document){const r=host.current?.getBoundingClientRect();return{width:r?.width||innerWidth,height:r?.height||innerHeight}}return{width:doc.defaultView?.innerWidth||innerWidth,height:doc.defaultView?.innerHeight||innerHeight}}
+  // Pase de página interactivo: transforma solo el contenedor del EPUB (sin capturas ni WebGL).
+  function turnMode():TurnMode{const m=settingsRef.current.pageMode;if(m==='scroll'||reducedMotion())return'none';return m==='curl'?'curl':'slide'}
+  function paintTurn(mode:'curl'|'slide',dir:'next'|'prev',ratio:number,width:number){
+    const el=host.current;if(!el)return
+    const r=Math.max(0,Math.min(1,ratio));let shade=0
+    el.style.transition='none';el.style.willChange='transform'
+    if(mode==='curl'){
+      el.style.transformOrigin='0% 50%'
+      if(dir==='next'){el.style.transform=`rotateY(${(-Math.acos(1-r)*180/Math.PI).toFixed(2)}deg)`;shade=r}
+      else{el.style.transform=`translate3d(${(r*width*.12).toFixed(1)}px,0,0)`;shade=r*.35}
+    }else{el.style.transform=`translate3d(${((dir==='next'?-1:1)*r*width).toFixed(1)}px,0,0)`;shade=r*.45}
+    el.style.setProperty('--turn-shade',shade.toFixed(3))
+  }
+  function clearTurn(){const el=host.current;if(!el)return;el.style.transform='';el.style.transformOrigin='';el.style.transition='';el.style.willChange='';el.style.opacity='';el.style.removeProperty('--turn-shade')}
+  function hostWidth(){return host.current?.getBoundingClientRect().width||innerWidth}
+  async function turnPage(dir:'next'|'prev',from=0){
+    if(turning.current)return
+    const mode=turnMode(),el=host.current
+    if(mode==='none'||!el){clearTurn();await navigatePage(dir);return}
+    if(busy.current){clearTurn();return}
+    turning.current=true
+    const w=hostWidth()
+    try{
+      if(mode==='curl'&&dir==='next'){
+        await tween(Math.round(320*(1-from))+90,t=>paintTurn('curl','next',from+(1-from)*t,w))
+        if(!await navigatePage('next'))await tween(280,t=>paintTurn('curl','next',1-t,w))
+      }else if(mode==='curl'){
+        if(from>0)await tween(110,t=>paintTurn('curl','prev',from*(1-t),w))
+        paintTurn('curl','next',1,w)
+        await navigatePage('prev')
+        await tween(360,t=>paintTurn('curl','next',1-t,w))
+      }else{
+        const sign=dir==='next'?-1:1
+        await tween(Math.round(210*(1-from))+60,t=>paintTurn('slide',dir,from+(1-from)*t,w))
+        const moved=await navigatePage(dir),startX=moved?-sign*w*.28:sign*w
+        await tween(240,t=>{el.style.transform=`translate3d(${(startX*(1-t)).toFixed(1)}px,0,0)`;el.style.opacity=moved?String(.35+.65*t):'';el.style.setProperty('--turn-shade',((1-t)*.3).toFixed(3))})
+      }
+    }catch(e){console.warn('Lectoria: animación de página omitida',e)}
+    finally{clearTurn();turning.current=false}
+  }
+  async function cancelTurn(dir:'next'|'prev',from:number){
+    const mode=turnMode();if(mode==='none'||turning.current){clearTurn();return}
+    turning.current=true;const w=hostWidth()
+    try{await tween(Math.round(220*from)+80,t=>paintTurn(mode,dir,from*(1-t),w))}finally{clearTurn();turning.current=false}
+  }
+  function point(t:Touch,doc:Document){const hr=host.current?.getBoundingClientRect();if(doc===document)return hr?{x:t.clientX-hr.left,y:t.clientY-hr.top}:{x:t.clientX,y:t.clientY};const fr=(doc.defaultView?.frameElement as HTMLElement|null)?.getBoundingClientRect();return{x:t.clientX+(fr?.left||0)-(hr?.left||0),y:t.clientY+(fr?.top||0)-(hr?.top||0)}}
+  function size(){const r=host.current?.getBoundingClientRect();return{width:r?.width||innerWidth,height:r?.height||innerHeight}}
   function start(e:TouchEvent,doc:Document){
-    if(settingsRef.current.pageMode==='scroll'||e.touches.length!==1||busy.current)return
+    if(settingsRef.current.pageMode==='scroll'||e.touches.length!==1||busy.current||turning.current)return
     const target=e.target as Element|null;if(target?.closest('button,input,textarea,select,a,video,audio'))return
     if(doc.defaultView?.getSelection()?.toString().trim())return
-    const p=point(e.touches[0],doc),s=size(doc),now=performance.now(),band=Math.max(20,Math.min(48,s.width*.065)),vertical=p.y>s.height*.16&&p.y<s.height*.84,edge=vertical&&(p.x<=band||p.x>=s.width-band)
+    const p=point(e.touches[0],doc),s=size(),now=performance.now(),band=Math.max(20,Math.min(48,s.width*.065)),vertical=p.y>s.height*.16&&p.y<s.height*.84,edge=vertical&&(p.x<=band||p.x>=s.width-band)
     swipe.current={active:true,dragging:false,blocked:false,edge,startX:p.x,startY:p.y,lastX:p.x,lastY:p.y,lastAt:now,startAt:now,velocityX:0,width:s.width,height:s.height,direction:p.x>s.width/2?'next':'prev',doc}
   }
   function move(e:TouchEvent){
-    const g=swipe.current;if(!g.active||g.blocked||!g.edge||e.touches.length!==1||!g.doc)return
+    const g=swipe.current;if(!g.active||g.blocked||e.touches.length!==1||!g.doc||turning.current)return
     const p=point(e.touches[0],g.doc),dx=p.x-g.startX,dy=p.y-g.startY,ax=Math.abs(dx),ay=Math.abs(dy),elapsed=performance.now()-g.startAt
     if(!g.dragging){if(ax<7&&ay<7)return;if(elapsed>320||ay>ax*1.15){g.blocked=true;return}if(ax<=ay)return;g.dragging=true}
     if(e.cancelable)e.preventDefault();const now=performance.now(),dt=Math.max(1,now-g.lastAt);g.velocityX=(p.x-g.lastX)/dt;g.lastX=p.x;g.lastY=p.y;g.lastAt=now
-    if(settingsRef.current.pageMode==='slide'){const ratio=Math.min(1,Math.abs(dx)/Math.max(1,g.width));stage.current?.style.setProperty('--lectoria-slide',String(ratio));stage.current?.classList.toggle('lectoria-slide-next',dx<0);stage.current?.classList.toggle('lectoria-slide-prev',dx>0)}
+    g.direction=dx<0?'next':'prev'
+    const mode=turnMode();if(mode!=='none')paintTurn(mode,g.direction,ax/Math.max(1,g.width),g.width)
   }
-  function clearSlideVisual(){stage.current?.style.removeProperty('--lectoria-slide');stage.current?.classList.remove('lectoria-slide-next','lectoria-slide-prev')}
   function finish(e:TouchEvent,cancelled=false){
     const g=swipe.current;if(!g.active)return;const t=e.changedTouches[0]
     if(t&&g.doc){const p=point(t,g.doc),now=performance.now(),dt=Math.max(1,now-g.lastAt);g.velocityX=(p.x-g.lastX)/dt;g.lastX=p.x;g.lastY=p.y;g.lastAt=now}
-    g.active=false;if(g.blocked||cancelled){clearSlideVisual();return}
-    const dx=g.lastX-g.startX,dy=g.lastY-g.startY,distance=Math.abs(dx);if(g.doc?.defaultView?.getSelection()?.toString().trim()){clearSlideVisual();return}
-    if(!g.edge){if(distance<10&&Math.abs(dy)<10&&g.startX>g.width*.28&&g.startX<g.width*.72)onCenterTap();clearSlideVisual();return}
-    if(!g.dragging){if(distance<10&&Math.abs(dy)<10)void navigatePage(g.direction);clearSlideVisual();return}
-    if(e.cancelable)e.preventDefault();const correct=(g.direction==='next'&&dx<0)||(g.direction==='prev'&&dx>0),threshold=Math.min(88,g.width*.095),flick=Math.abs(g.velocityX)>.38&&distance>20
-    if(correct&&(distance>=threshold||flick))void navigatePage(g.direction)
-    window.setTimeout(clearSlideVisual,90)
+    g.active=false
+    const dx=g.lastX-g.startX,dy=g.lastY-g.startY,distance=Math.abs(dx),ratio=Math.min(1,distance/Math.max(1,g.width))
+    if(g.dragging){
+      if(e.cancelable)e.preventDefault()
+      if(cancelled||g.doc?.defaultView?.getSelection()?.toString().trim()){void cancelTurn(g.direction,ratio);return}
+      const dir:'next'|'prev'=dx<0?'next':'prev',threshold=Math.min(88,g.width*.095),along=Math.sign(g.velocityX)===Math.sign(dx),flick=Math.abs(g.velocityX)>.38&&distance>20&&along,flickBack=!along&&Math.abs(g.velocityX)>.3
+      if(flick||(distance>=threshold&&!flickBack))void turnPage(dir,ratio);else void cancelTurn(dir,ratio)
+      return
+    }
+    if(g.blocked||cancelled||g.doc?.defaultView?.getSelection()?.toString().trim())return
+    if(distance<10&&Math.abs(dy)<10){if(g.edge)void turnPage(g.direction);else if(g.startX>g.width*.28&&g.startX<g.width*.72)onCenterTap()}
   }
   function attach(doc:Document){if(docs.current.has(doc)){documentTypography(doc);return}docs.current.add(doc);documentTypography(doc);doc.documentElement.style.touchAction='pan-y pinch-zoom';if(doc.body)doc.body.style.touchAction='pan-y pinch-zoom';doc.addEventListener('touchstart',e=>start(e,doc),{passive:true});doc.addEventListener('touchmove',move,{passive:false});doc.addEventListener('touchend',e=>finish(e),{passive:false});doc.addEventListener('touchcancel',e=>finish(e,true),{passive:false})}
   function attachFrames(){const r:any=rendition.current;try{for(const c of r?.getContents?.()||[])if(c?.document)attach(c.document)}catch{}}
@@ -161,7 +216,7 @@ export function useReaderEngine(bookRecord:BookRecord,onCenterTap:()=>void,onOff
 
   useEffect(()=>{const s=stage.current;if(!s)return;const a=(e:TouchEvent)=>start(e,document),b=(e:TouchEvent)=>move(e),c=(e:TouchEvent)=>finish(e),d=(e:TouchEvent)=>finish(e,true);s.addEventListener('touchstart',a,{passive:true});s.addEventListener('touchmove',b,{passive:false});s.addEventListener('touchend',c,{passive:false});s.addEventListener('touchcancel',d,{passive:false});return()=>{s.removeEventListener('touchstart',a);s.removeEventListener('touchmove',b);s.removeEventListener('touchend',c);s.removeEventListener('touchcancel',d)}},[])
 
-  useEffect(()=>{const key=(ev:KeyboardEvent)=>{const target=ev.target as HTMLElement|null;if(target?.closest('input,textarea,select,[contenteditable="true"]')||document.querySelector('[aria-modal="true"]'))return;if(settingsRef.current.pageMode==='scroll')return;if(ev.key==='ArrowRight'||ev.key==='PageDown'||(ev.key===' '&&!ev.shiftKey)){ev.preventDefault();void navigatePage('next')}else if(ev.key==='ArrowLeft'||ev.key==='PageUp'||(ev.key===' '&&ev.shiftKey)){ev.preventDefault();void navigatePage('prev')}};window.addEventListener('keydown',key);return()=>window.removeEventListener('keydown',key)},[])
+  useEffect(()=>{const key=(ev:KeyboardEvent)=>{const target=ev.target as HTMLElement|null;if(target?.closest('input,textarea,select,[contenteditable="true"]')||document.querySelector('[aria-modal="true"]'))return;if(settingsRef.current.pageMode==='scroll')return;if(ev.key==='ArrowRight'||ev.key==='PageDown'||(ev.key===' '&&!ev.shiftKey)){ev.preventDefault();void turnPage('next')}else if(ev.key==='ArrowLeft'||ev.key==='PageUp'||(ev.key===' '&&ev.shiftKey)){ev.preventDefault();void turnPage('prev')}};window.addEventListener('keydown',key);return()=>window.removeEventListener('keydown',key)},[])
 
-  return{host,stage,rendition,settings,setSettings,progress,location,chapter,href,toc,selectedText,nearby,context,limit,setLimit,minutes,ready,error,retry,navigatePage,displayTarget,seekProgress,goBackLocation,canGoBackLocation,saveHighlight,removeHighlight,clearSelection}
+  return{host,stage,rendition,settings,setSettings,progress,location,chapter,href,toc,selectedText,nearby,context,limit,setLimit,minutes,ready,error,retry,navigatePage,turnPage,displayTarget,seekProgress,goBackLocation,canGoBackLocation,saveHighlight,removeHighlight,clearSelection}
 }

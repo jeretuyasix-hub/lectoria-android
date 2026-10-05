@@ -25,6 +25,9 @@ jobs:
 
       - name: Configurar Android SDK
         uses: android-actions/setup-android@v3
+        with:
+          # El paquete legado 'tools' (instalado por defecto) ya no existe en el SDK.
+          packages: platform-tools
 
       - name: Restaurar firma Android de desarrollo
         uses: actions/cache@v4
